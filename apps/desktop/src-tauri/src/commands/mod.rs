@@ -1,3 +1,4 @@
+pub mod fonts;
 pub mod fs;
 pub mod images;
 pub mod recents;
