@@ -3,6 +3,7 @@
 ## 2026-07-11
 
 - Fix the compact-window picker sometimes showing an empty recents list. Three causes: the picker showed "No other recent files" while the list was still being fetched (now it waits for the first fetch before rendering the empty state); a transiently unreadable file (iCloud/Dropbox eviction, slow mounts, startup permission prompts) caused the backend to permanently delete entries from the persisted list (dead entries are now only filtered from the response, never persisted away); and files recorded with `.markdown`/uppercase extensions were persisted but silently dropped at read time (recording and display now agree on case-insensitive `.md`).
+- Harden global recents persistence: the list is now written via temp-file + rename so a crash mid-write can't truncate it, and read/parse failures are logged instead of being silently treated as an empty list.
 - Fix jumpy scrolling in documents with images. Folded image widgets now remember their measured height per image URL, reserve that height while the image (re)decodes, report it as the CodeMirror height estimate, and request a re-measure when the image finishes loading — so scrolling past images no longer shifts the document under the viewport. Rendered images are also capped at the pane width instead of overflowing horizontally.
 
 ## 2026-06-22

@@ -57,8 +57,12 @@ fn load_recent_files(app: &tauri::AppHandle) -> Vec<RecentEntry> {
     if !path.exists() {
         return Vec::new();
     }
-    let Ok(data) = std::fs::read_to_string(&path) else {
-        return Vec::new();
+    let data = match std::fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(error) => {
+            eprintln!("[recents] failed to read recent files list: {error}");
+            return Vec::new();
+        }
     };
     // Current format: array of { path, opened_at }.
     if let Ok(entries) = serde_json::from_str::<Vec<RecentEntry>>(&data) {
@@ -71,13 +75,18 @@ fn load_recent_files(app: &tauri::AppHandle) -> Vec<RecentEntry> {
             .map(|path| RecentEntry { path, opened_at: 0 })
             .collect();
     }
+    eprintln!("[recents] recent files list is corrupt; starting over");
     Vec::new()
 }
 
+// Write-to-temp + rename so a crash mid-write can't leave a truncated file
+// (a truncated file parses as neither format and reads back as empty).
 fn save_recent_files(app: &tauri::AppHandle, recents: &[RecentEntry]) -> Result<(), AppError> {
     let path = recent_files_path(app)?;
     let data = serde_json::to_string_pretty(recents).map_err(|e| AppError::Io(e.to_string()))?;
-    std::fs::write(&path, data)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, &path)?;
     Ok(())
 }
 
