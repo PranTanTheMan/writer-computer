@@ -305,7 +305,11 @@ pub async fn write_file(
 }
 
 pub(crate) fn markdown_file_entry(path: &Path) -> Option<DirEntry> {
-    if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("md") {
+    if !path.is_file()
+        || !path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+    {
         return None;
     }
 

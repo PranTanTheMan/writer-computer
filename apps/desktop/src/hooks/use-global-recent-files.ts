@@ -9,6 +9,10 @@ import type { RecentFile } from "@/lib/tauri";
 
 interface GlobalRecentFiles {
   files: RecentFile[];
+  /** False until the first fetch resolves. Consumers should not render an
+   *  empty state while this is false — `files` starts `[]` regardless of
+   *  what is persisted. */
+  loaded: boolean;
   /** Remove one entry from the global recents (optimistic + persisted). */
   remove: (path: string) => void;
   /** Re-fetch the list from the backend. */
@@ -22,13 +26,16 @@ interface GlobalRecentFiles {
  *  pruned of deleted files server-side. */
 export function useGlobalRecentFiles(limit = 30, enabled = true): GlobalRecentFiles {
   const [files, setFiles] = useState<RecentFile[]>([]);
+  const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(() => {
     let cancelled = false;
     void tauri
       .getRecentFilesGlobal(limit)
       .then((entries) => {
-        if (!cancelled) setFiles(entries);
+        if (cancelled) return;
+        setFiles(entries);
+        setLoaded(true);
       })
       .catch((error: unknown) => {
         console.error("Failed to read global recent files", error);
@@ -50,5 +57,5 @@ export function useGlobalRecentFiles(limit = 30, enabled = true): GlobalRecentFi
     });
   }, []);
 
-  return { files, remove, refresh };
+  return { files, loaded, remove, refresh };
 }

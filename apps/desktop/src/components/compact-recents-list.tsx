@@ -24,7 +24,7 @@ export function CompactRecentsList({
   onOpenFileComplete,
   className,
 }: CompactRecentsListProps) {
-  const { files: recentFiles, remove } = useGlobalRecentFiles();
+  const { files: recentFiles, loaded, remove } = useGlobalRecentFiles();
   const activeFilePath = useActiveFilePath();
   const visibleRecentFiles = recentFiles.filter((entry) => entry.path !== activeFilePath);
 
@@ -52,11 +52,11 @@ export function CompactRecentsList({
             />
           ))}
         </menu>
-      ) : (
+      ) : loaded ? (
         <div className="px-2.5 py-3 text-[13px] text-[var(--text-muted)]">
           No other recent files.
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
