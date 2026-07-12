@@ -171,6 +171,9 @@ const baseThemeSpec = {
   ".cm-image-block": {
     paddingLeft: "6px",
   },
+  ".cm-image img": {
+    maxWidth: "100%",
+  },
   ".cm-inline-code": {
     fontFamily: codeFontFamily,
     fontVariantLigatures: "none",

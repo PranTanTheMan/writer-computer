@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-11
+
+- Fix jumpy scrolling in documents with images. Folded image widgets now remember their measured height per image URL, reserve that height while the image (re)decodes, report it as the CodeMirror height estimate, and request a re-measure when the image finishes loading — so scrolling past images no longer shifts the document under the viewport. Rendered images are also capped at the pane width instead of overflowing horizontally.
+
 ## 2026-06-22
 
 - Code-health pass across the desktop app and marketing site (now scoring 100/100 on React Doctor). Mostly internal, with a few user-relevant effects: more screen-reader labels on editor and settings controls, semantic landmarks in the editor chrome, a lighter backdrop blur on the anchor-warning banner, and DOMPurify sanitization of rendered Mermaid diagram SVG. Also broke several module import cycles (notably by splitting page-kind views from their behavior so the stores no longer pull in the editor UI), removed unused dependencies (`motion`, `react-resizable-panels`) and dead code, and parallelized a few independent file reads.
