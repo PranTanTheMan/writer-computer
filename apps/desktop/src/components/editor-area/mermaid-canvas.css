@@ -73,7 +73,7 @@
   padding: 8px 0;
   max-width: none;
   margin: 0;
-  font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
+  font-family: var(--pm-code-font, var(--mono-font, "SF Mono", Menlo, Monaco, Consolas, monospace));
   font-size: 12px;
   line-height: 1.5;
 }
@@ -256,7 +256,7 @@
   justify-content: center;
   padding: 1.5em 2em;
   color: var(--text-error, #ff6b6b);
-  font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
+  font-family: var(--pm-code-font, var(--mono-font, "SF Mono", Menlo, Monaco, Consolas, monospace));
   font-size: 0.85em;
   text-align: center;
   white-space: pre-wrap;

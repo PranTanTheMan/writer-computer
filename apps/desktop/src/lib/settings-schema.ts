@@ -75,6 +75,7 @@ export type PrimarySuffix =
   | "foreground"
   | "ui-font"
   | "editor-font"
+  | "mono-font"
   | "translucent"
   | "contrast";
 

@@ -256,7 +256,7 @@ const htmlBlockTheme = EditorView.baseTheme({
     overflow: "auto",
   },
   ".cm-html-block-widget code": {
-    fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
+    fontFamily: "var(--pm-code-font, 'SF Mono', Menlo, Monaco, Consolas, monospace)",
     fontSize: "0.9em",
   },
   ".cm-html-block-widget blockquote": {
