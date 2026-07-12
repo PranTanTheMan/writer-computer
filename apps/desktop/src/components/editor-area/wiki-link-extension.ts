@@ -15,18 +15,29 @@ import {
   type CompletionContext,
   type CompletionResult,
 } from "@codemirror/autocomplete";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import * as tauri from "@/lib/tauri";
 import { getFileStem } from "@/lib/paths";
 import { getWorkspaceRoot } from "@/hooks/workspace-api";
 import * as editorApi from "@/hooks/editor-api";
-import { canonicalWikiTarget, parseWikiLink, resolveWikiLink } from "@/lib/wiki-links";
+import {
+  canonicalWikiTarget,
+  parseWikiLink,
+  parseWikiImageEmbedTarget,
+  resolveWikiImage,
+  resolveWikiLink,
+} from "@/lib/wiki-links";
+import { attachStableImageHeight } from "@/lib/prosemark-core/fold/image";
 import { getEffectiveSelectionRanges } from "./drag-selection-gate";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const WIKI_LINK_RE = /\[\[([^\]]+)\]\]/g;
+// Group 1: optional `!` embed prefix (Obsidian image embeds). Group 2: inner
+// target. The prefix must be captured here — treating `![[img.png]]` as a
+// plain wiki link used to render a link widget with a stray literal `!`.
+const WIKI_LINK_RE = /(!?)\[\[([^\]]+)\]\]/g;
 
 const CODE_NODE_NAMES = new Set(["FencedCode", "InlineCode", "CodeBlock", "CodeText", "CodeInfo"]);
 
@@ -63,7 +74,7 @@ function extractWikiTarget(
     const matchStart = line.from + match.index;
     const matchEnd = matchStart + match[0].length;
     if (pos >= matchStart && pos <= matchEnd) {
-      return match[1];
+      return match[2];
     }
   }
 
@@ -97,30 +108,127 @@ class WikiLinkWidget extends WidgetType {
 
 const wikiLinkEditingMark = Decoration.mark({ class: "cm-wiki-link-editing" });
 
-function buildDecorations(view: EditorView): DecorationSet {
+// Resolved embed targets, keyed by workspace root + note dir + target.
+// Positive-only: a hit means the file existed at that absolute path when we
+// looked; misses re-probe on the next widget build so newly added images
+// appear without an invalidation channel. Bounded in practice by the number
+// of distinct embeds the user views in a session.
+const embedResolutionCache = new Map<string, string>();
+
+async function resolveEmbed(
+  target: string,
+  workspaceRoot: string | null,
+  currentFilePath: string | null,
+): Promise<string | null> {
+  const key = `${workspaceRoot ?? ""}\0${currentFilePath ?? ""}\0${target}`;
+  const cached = embedResolutionCache.get(key);
+  if (cached) return cached;
+  const resolved = await resolveWikiImage(
+    target,
+    workspaceRoot,
+    currentFilePath,
+    tauri.fileExists,
+    tauri.findFileByName,
+  );
+  if (resolved) embedResolutionCache.set(key, resolved);
+  return resolved;
+}
+
+/** Obsidian-style image embed `![[image.png]]`. Renders the resolved image
+ *  inline (reusing the `.cm-image` styling and the shared height-stability
+ *  cache from `fold/image.ts`); unresolved targets render the raw source
+ *  text as a muted placeholder. */
+class ImageEmbedWidget extends WidgetType {
+  constructor(
+    readonly rawText: string,
+    readonly target: string,
+    readonly workspaceRoot: string | null,
+    readonly currentFilePath: string | null,
+  ) {
+    super();
+  }
+
+  eq(other: ImageEmbedWidget): boolean {
+    return (
+      this.rawText === other.rawText &&
+      this.target === other.target &&
+      this.workspaceRoot === other.workspaceRoot &&
+      this.currentFilePath === other.currentFilePath
+    );
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const elem = document.createElement("span");
+    elem.className = "cm-image cm-image-embed";
+    const image = document.createElement("img");
+    attachStableImageHeight(image, elem, this.target, view);
+    elem.appendChild(image);
+
+    void resolveEmbed(this.target, this.workspaceRoot, this.currentFilePath)
+      .then((absolutePath) => {
+        if (absolutePath) {
+          image.src = convertFileSrc(absolutePath);
+        } else {
+          this.renderPlaceholder(elem, image);
+        }
+      })
+      .catch((error) => {
+        console.error("[editor] Failed to resolve image embed:", error);
+        this.renderPlaceholder(elem, image);
+      });
+
+    return elem;
+  }
+
+  private renderPlaceholder(elem: HTMLElement, image: HTMLImageElement) {
+    image.remove();
+    elem.classList.add("cm-image-embed-unresolved");
+    elem.textContent = this.rawText;
+  }
+
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+function buildDecorations(view: EditorView, getFilePath: () => string): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const { doc } = view.state;
   // Use the drag-frozen snapshot when a pointer drag is in progress, so the
   // link doesn't flip between rendered and raw mid-drag.
   const ranges = getEffectiveSelectionRanges(view.state);
+  const workspaceRoot = getWorkspaceRoot();
+  const currentFilePath = getFilePath() || null;
 
   for (const { from, to } of view.visibleRanges) {
     const text = doc.sliceString(from, to);
     WIKI_LINK_RE.lastIndex = 0;
     let match;
     while ((match = WIKI_LINK_RE.exec(text)) !== null) {
-      const start = from + match.index;
-      const end = start + match[0].length;
+      const inner = match[2]!;
+      const embedTarget = match[1] ? parseWikiImageEmbedTarget(inner) : null;
+      // Non-image embeds (note transclusions, PDFs) keep the plain link
+      // rendering over the `[[...]]` part, leaving the `!` as source text.
+      const start = from + match.index + (match[1] && !embedTarget ? 1 : 0);
+      const end = from + match.index + match[0].length;
       if (isInsideCode(view.state, start)) continue;
 
       const cursorInside = ranges.some((r) => r.from >= start && r.to <= end);
 
       if (cursorInside) {
-        // Editing: show raw [[...]] with subtle link color
+        // Editing: show raw source with subtle link color
         builder.add(start, end, wikiLinkEditingMark);
+      } else if (embedTarget) {
+        builder.add(
+          start,
+          end,
+          Decoration.replace({
+            widget: new ImageEmbedWidget(match[0], embedTarget, workspaceRoot, currentFilePath),
+          }),
+        );
       } else {
         // Folded: replace with clean link text
-        builder.add(start, end, Decoration.replace({ widget: new WikiLinkWidget(match[1]) }));
+        builder.add(start, end, Decoration.replace({ widget: new WikiLinkWidget(inner) }));
       }
     }
   }
@@ -128,22 +236,24 @@ function buildDecorations(view: EditorView): DecorationSet {
   return builder.finish();
 }
 
-const wikiLinkDecorations = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
+function wikiLinkDecorations(getFilePath: () => string) {
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
 
-    constructor(view: EditorView) {
-      this.decorations = buildDecorations(view);
-    }
-
-    update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged || update.selectionSet) {
-        this.decorations = buildDecorations(update.view);
+      constructor(view: EditorView) {
+        this.decorations = buildDecorations(view, getFilePath);
       }
-    }
-  },
-  { decorations: (v) => v.decorations },
-);
+
+      update(update: ViewUpdate) {
+        if (update.docChanged || update.viewportChanged || update.selectionSet) {
+          this.decorations = buildDecorations(update.view, getFilePath);
+        }
+      }
+    },
+    { decorations: (v) => v.decorations },
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Autocomplete
@@ -274,6 +384,9 @@ const wikiLinkTheme = EditorView.baseTheme({
   ".cm-wiki-link-editing": {
     color: "var(--pm-link-color, #7cacf8)",
   },
+  ".cm-image-embed-unresolved": {
+    color: "var(--text-muted, #888)",
+  },
   // Inner-list styling for the autocomplete tooltip. The card chrome
   // (background, blur, border, radius) is inherited from `.surface-card,
   // [cmdk-dialog], .cm-tooltip.cm-tooltip-autocomplete` in App.css so the
@@ -311,7 +424,7 @@ export function wikiLinkExtension(
   isDisposed: () => boolean,
 ): Extension[] {
   return [
-    wikiLinkDecorations,
+    wikiLinkDecorations(getFilePath),
     wikiLinkClickHandler(getFilePath, isDisposed),
     wikiLinkTheme,
     // Append the autocomplete tooltip to `document.body` so it escapes

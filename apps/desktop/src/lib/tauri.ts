@@ -51,6 +51,12 @@ export function fileExists(path: string): Promise<boolean> {
   return invoke("file_exists", { path });
 }
 
+/** Case-insensitive basename lookup across the workspace (gitignore-aware
+ *  walk; shortest path wins on duplicates). Used by wiki image embeds. */
+export function findFileByName(root: string, fileName: string): Promise<string | null> {
+  return invoke("find_file_by_name", { root, fileName });
+}
+
 export function revealInFileManager(path: string): Promise<void> {
   return invoke("reveal_in_file_manager", { path });
 }

@@ -1,4 +1,4 @@
-import { getFileStem, normalizePath } from "./paths";
+import { getFileStem, getParentDir, normalizePath } from "./paths";
 import type { SearchResult } from "@/types/fs";
 
 export type WikiLinkTarget = { kind: "internal"; path: string } | { kind: "unresolved" };
@@ -117,6 +117,72 @@ export async function resolveWikiLink(
   }
 
   return { kind: "unresolved" };
+}
+
+// Image formats supported by Obsidian-style embeds (`![[image.png]]`),
+// per SPECs/obsidian-image-embed-spec.md.
+const WIKI_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+
+/**
+ * Parse the inner text of a `![[...]]` embed. Returns the normalized image
+ * path (slashes normalized, leading `/` stripped) when the target is an
+ * image, or null for non-image embeds (note transclusions, PDFs, …).
+ * Anything after an unescaped `|` (alias / size modifiers) is ignored —
+ * v1 non-goals per the spec.
+ */
+export function parseWikiImageEmbedTarget(raw: string): string | null {
+  const { target } = splitAlias(raw.trim());
+  const path = unescapeWikiText(target).replace(/\\/g, "/").replace(/^\/+/, "");
+  const dot = path.lastIndexOf(".");
+  if (dot <= 0 || dot === path.length - 1) return null;
+  const ext = path.slice(dot + 1).toLowerCase();
+  return WIKI_IMAGE_EXTENSIONS.has(ext) ? path : null;
+}
+
+/**
+ * Resolve a wiki image embed target to an absolute file path, or null.
+ *
+ * - Targets with `/` resolve workspace-relative first (Obsidian vault-path
+ *   semantics), then relative to the current note's directory.
+ * - Bare basenames probe next to the note and at the workspace root, then
+ *   fall back to a case-insensitive basename search across the workspace
+ *   (`findFileByName`) — Obsidian's default "shortest path" links reference
+ *   attachments by bare filename wherever they live.
+ * - Without a workspace (compact windows), only note-relative probing
+ *   applies.
+ */
+export async function resolveWikiImage(
+  target: string,
+  workspaceRoot: string | null,
+  currentFilePath: string | null,
+  fileExists: (path: string) => Promise<boolean>,
+  findFileByName: (root: string, fileName: string) => Promise<string | null>,
+): Promise<string | null> {
+  const noteDir = currentFilePath ? getParentDir(currentFilePath) : null;
+  const root = workspaceRoot ? workspaceRoot.replace(/\/$/, "") : null;
+
+  const candidates: string[] = [];
+  const pushCandidate = (base: string | null) => {
+    if (!base) return;
+    const path = normalizePath(`${base}/${target}`);
+    if (!candidates.includes(path)) candidates.push(path);
+  };
+  if (target.includes("/")) {
+    pushCandidate(root);
+    pushCandidate(noteDir);
+  } else {
+    pushCandidate(noteDir);
+    pushCandidate(root);
+  }
+
+  for (const candidate of candidates) {
+    if (await fileExists(candidate)) return candidate;
+  }
+
+  if (root && !target.includes("/")) {
+    return findFileByName(root, target);
+  }
+  return null;
 }
 
 /**

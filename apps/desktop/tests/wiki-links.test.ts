@@ -3,6 +3,8 @@ import {
   canonicalWikiTarget,
   normalizeWikiTarget,
   parseWikiLink,
+  parseWikiImageEmbedTarget,
+  resolveWikiImage,
   resolveWikiLink,
 } from "../src/lib/wiki-links";
 import type { SearchResult } from "../src/types/fs";
@@ -384,5 +386,118 @@ describe("canonicalWikiTarget", () => {
     ];
 
     expect(canonicalWikiTarget(file, allFiles)).toBe("a/Notes");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseWikiImageEmbedTarget
+// ---------------------------------------------------------------------------
+
+describe("parseWikiImageEmbedTarget", () => {
+  test("accepts supported image extensions case-insensitively", () => {
+    expect(parseWikiImageEmbedTarget("diagram.png")).toBe("diagram.png");
+    expect(parseWikiImageEmbedTarget("Photo.JPEG")).toBe("Photo.JPEG");
+    expect(parseWikiImageEmbedTarget("anim.gif")).toBe("anim.gif");
+    expect(parseWikiImageEmbedTarget("icon.svg")).toBe("icon.svg");
+  });
+
+  test("normalizes slashes and strips leading slash", () => {
+    expect(parseWikiImageEmbedTarget("assets\\pic.png")).toBe("assets/pic.png");
+    expect(parseWikiImageEmbedTarget("/assets/pic.png")).toBe("assets/pic.png");
+  });
+
+  test("ignores alias and size modifiers after a pipe", () => {
+    expect(parseWikiImageEmbedTarget("pic.png|400")).toBe("pic.png");
+    expect(parseWikiImageEmbedTarget("pic.png|alt text")).toBe("pic.png");
+  });
+
+  test("rejects non-image targets", () => {
+    expect(parseWikiImageEmbedTarget("Some Note")).toBeNull();
+    expect(parseWikiImageEmbedTarget("Some Note.md")).toBeNull();
+    expect(parseWikiImageEmbedTarget("report.pdf")).toBeNull();
+    expect(parseWikiImageEmbedTarget(".png")).toBeNull();
+    expect(parseWikiImageEmbedTarget("dot.")).toBeNull();
+    expect(parseWikiImageEmbedTarget("")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveWikiImage
+// ---------------------------------------------------------------------------
+
+describe("resolveWikiImage", () => {
+  const noFind = vi.fn(async () => null);
+
+  test("resolves path targets workspace-relative first", async () => {
+    const fileExists = vi.fn(async (p: string) => p === "/vault/assets/pic.png");
+    const result = await resolveWikiImage(
+      "assets/pic.png",
+      "/vault",
+      "/vault/notes/note.md",
+      fileExists,
+      noFind,
+    );
+    expect(result).toBe("/vault/assets/pic.png");
+  });
+
+  test("falls back to note-relative for path targets", async () => {
+    const fileExists = vi.fn(async (p: string) => p === "/vault/notes/assets/pic.png");
+    const result = await resolveWikiImage(
+      "assets/pic.png",
+      "/vault",
+      "/vault/notes/note.md",
+      fileExists,
+      noFind,
+    );
+    expect(result).toBe("/vault/notes/assets/pic.png");
+  });
+
+  test("probes note dir first for bare basenames", async () => {
+    const fileExists = vi.fn(async (p: string) => p === "/vault/notes/pic.png");
+    const result = await resolveWikiImage(
+      "pic.png",
+      "/vault",
+      "/vault/notes/note.md",
+      fileExists,
+      noFind,
+    );
+    expect(result).toBe("/vault/notes/pic.png");
+    expect(noFind).not.toHaveBeenCalled();
+  });
+
+  test("falls back to workspace basename search for bare names", async () => {
+    const fileExists = vi.fn(async () => false);
+    const findFileByName = vi.fn(async (root: string, name: string) =>
+      root === "/vault" && name === "pic.png" ? "/vault/deep/attachments/pic.png" : null,
+    );
+    const result = await resolveWikiImage(
+      "pic.png",
+      "/vault",
+      "/vault/notes/note.md",
+      fileExists,
+      findFileByName,
+    );
+    expect(result).toBe("/vault/deep/attachments/pic.png");
+  });
+
+  test("does not basename-search for path targets", async () => {
+    const fileExists = vi.fn(async () => false);
+    const findFileByName = vi.fn(async () => "/vault/wrong.png");
+    const result = await resolveWikiImage(
+      "assets/pic.png",
+      "/vault",
+      null,
+      fileExists,
+      findFileByName,
+    );
+    expect(result).toBeNull();
+    expect(findFileByName).not.toHaveBeenCalled();
+  });
+
+  test("resolves note-relative without a workspace (compact mode)", async () => {
+    const fileExists = vi.fn(async (p: string) => p === "/anywhere/pic.png");
+    const result = await resolveWikiImage("pic.png", null, "/anywhere/note.md", fileExists, noFind);
+    expect(result).toBe("/anywhere/pic.png");
+    expect(noFind).not.toHaveBeenCalled();
   });
 });

@@ -10,6 +10,36 @@ import { iterChildren } from "../utils";
 // widget rebuilds and re-opens of the same document.
 const imageHeightCache = new Map<string, number>();
 
+/** Shared height-stability wiring for async-loading editor images (markdown
+ *  images and wiki embeds): reserve the last measured height for `cacheKey`
+ *  until this element (re)decodes, record the settled height, and ask the
+ *  view to re-measure so its scroll anchoring compensates. `load` can fire
+ *  more than once when a resolver rewrites `src` after insertion; the last
+ *  one wins. */
+export function attachStableImageHeight(
+  image: HTMLImageElement,
+  container: HTMLElement,
+  cacheKey: string,
+  view: EditorView,
+): void {
+  const cached = imageHeightCache.get(cacheKey);
+  if (cached !== undefined) {
+    image.style.height = `${cached}px`;
+  }
+  image.addEventListener("load", () => {
+    image.style.height = "";
+    const height = container.getBoundingClientRect().height;
+    if (height > 0) {
+      imageHeightCache.set(cacheKey, height);
+    }
+    view.requestMeasure();
+  });
+  image.addEventListener("error", () => {
+    image.style.height = "";
+    view.requestMeasure();
+  });
+}
+
 class ImageWidget extends WidgetType {
   constructor(
     public url: string,
@@ -33,26 +63,7 @@ class ImageWidget extends WidgetType {
       elem.className += " cm-image-block";
     }
     const image = document.createElement("img");
-    const cached = imageHeightCache.get(this.url);
-    if (cached !== undefined) {
-      // Reserve the last known height until this instance finishes decoding,
-      // so re-entering the viewport doesn't collapse-then-grow the block.
-      image.style.height = `${cached}px`;
-    }
-    // The src resolver plugin may rewrite `src` after insertion, so `load`
-    // can fire more than once; the last one wins.
-    image.addEventListener("load", () => {
-      image.style.height = "";
-      const height = elem.getBoundingClientRect().height;
-      if (height > 0) {
-        imageHeightCache.set(this.url, height);
-      }
-      view.requestMeasure();
-    });
-    image.addEventListener("error", () => {
-      image.style.height = "";
-      view.requestMeasure();
-    });
+    attachStableImageHeight(image, elem, this.url, view);
     image.src = this.url;
     elem.appendChild(image);
     return elem;

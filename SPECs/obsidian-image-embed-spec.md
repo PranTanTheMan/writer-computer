@@ -38,16 +38,28 @@ Reuse the existing wiki-link resolver (already shipped for `[[Doc]]` navigation)
 
 ## Editor Integration
 
-- Add a ProseMirror node (or decoration) for `obsidian-embed`.
-- The parser must recognize `![[...]]` only outside code spans, code blocks, and frontmatter.
-- The serializer round-trips back to the same `![[...]]` text on save.
+- Recognize `![[...]]` in the wiki-link decorator (`wiki-link-extension.ts`) — the
+  regex there must capture the `!` prefix anyway to stop rendering embeds as a
+  link widget with a stray literal `!`. Embeds outside code render as an
+  `ImageEmbedWidget` replace decoration; caret inside unfolds to raw source.
+- Round-trip is free: decorations never touch the buffer, so the source text
+  is preserved on save. (This is a CodeMirror codebase; the original
+  ProseMirror node/serializer language in this spec predates the editor.)
 
-## Files Expected To Change
+## Implementation Notes (as shipped)
 
-- `apps/desktop/src/components/editor-area/use-prosemark-editor.ts`
-- shared wiki-link resolver (`apps/desktop/src/lib/wiki-links.ts` from the wiki-link spec)
-- a new ProseMirror schema node and parser/serializer pair
-- frontend tests
+- Resolution ships in `lib/wiki-links.ts` (`parseWikiImageEmbedTarget`,
+  `resolveWikiImage`): path targets probe workspace-relative then
+  note-relative; bare basenames probe note dir and workspace root, then fall
+  back to the `find_file_by_name` Rust command — an on-demand gitignore-aware
+  walk with case-insensitive basename match, shortest path winning on
+  duplicates. There is no persistent media index; positive resolutions are
+  cached per (workspace, note, target) in the extension.
+- Compact windows (no workspace) resolve note-relative only.
+- Rendered embeds reuse `.cm-image` styling and the shared image
+  height-stability cache (`attachStableImageHeight` in `fold/image.ts`).
+- Non-image embeds (`![[Some Note]]`, PDFs) keep plain wiki-link rendering
+  over the `[[...]]` part with the `!` left as source text.
 
 ## Acceptance Criteria
 

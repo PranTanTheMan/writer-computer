@@ -6,6 +6,8 @@
 
 ## Done
 
+- Obsidian image embeds: [`SPECs/obsidian-image-embed-spec.md`](SPECs/obsidian-image-embed-spec.md) — `![[image.png]]` renders inline via the wiki-link decorator; path targets resolve workspace- then note-relative, bare basenames fall back to an on-demand case-insensitive basename walk (`find_file_by_name`, shortest path wins), unresolved embeds show the raw source as a muted placeholder.
+- Editor bug sweep — image widget scroll-height stability (per-URL measured-height cache + re-measure on decode), viewport force-parse on scroll so tree-derived decorations (list hanging indent, hide, fold) stop rendering stale in unparsed regions, and compact recents picker fixes (loading state before empty state, non-destructive prune, atomic saves, recording/display extension mismatch).
 - Sidebar drag-and-drop move: [`SPECs/sidebar-drag-and-drop-move-spec.md`](SPECs/sidebar-drag-and-drop-move-spec.md) — drag files/folders in the `Everything` tree to re-parent them (drop on folder → inside, on file → its folder, on empty space → workspace root), with multi-select batches, open-tab/pin/expanded-state rewrites, and collision reporting. Pointer-event based so it coexists with the existing Finder-drop-to-open; inline rename and drag-move now share one write path (`use-move-entry`).
 - Compact picker recents polish — add a plain non-hovering Recents label using sidebar section styling, remove the search field, per-row opened time, Open other file row, and active file entry, then keep the row remove affordance small so the picker is a direct global recents list.
 - Global-scoped compact mode: [`SPECs/global-compact-mode-spec.md`](SPECs/global-compact-mode-spec.md) — compact windows are fully workspace-free (no root, no indexing, parent-dir single-file watcher), the picker shows a persisted global recent-files list, and the workspace-scoped compact setting is replaced by an "Open File in Compact Window" command.
@@ -63,7 +65,6 @@ Previously-triaged work organized by phase. Pull into `Up Next` as capacity open
 #### Visual and media polish
 
 - [ ] Inline media preview: [`SPECs/inline-media-preview-spec.md`](SPECs/inline-media-preview-spec.md)
-- [ ] Obsidian image embed: [`SPECs/obsidian-image-embed-spec.md`](SPECs/obsidian-image-embed-spec.md)
 
 #### Architectural bets
 
