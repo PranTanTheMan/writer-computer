@@ -620,7 +620,8 @@ function createInnerEditor(
         EditorView.theme({
           "&": { height: "100%", fontSize: "13px" },
           ".cm-scroller": {
-            fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
+            fontFamily:
+              'var(--pm-code-font, var(--mono-font, "SF Mono", Menlo, Monaco, Consolas, monospace))',
           },
           "&.cm-focused": { outline: "none" },
         }),

@@ -53,7 +53,7 @@ export interface SettingDef {
   label: string;
   description: string;
   category: string;
-  type: "string" | "number" | "boolean" | "enum" | "list" | "color" | "range";
+  type: "string" | "number" | "boolean" | "enum" | "list" | "color" | "range" | "font";
   options?: string[];
   min?: number;
   max?: number;
@@ -75,6 +75,7 @@ export type PrimarySuffix =
   | "foreground"
   | "ui-font"
   | "editor-font"
+  | "mono-font"
   | "translucent"
   | "contrast";
 

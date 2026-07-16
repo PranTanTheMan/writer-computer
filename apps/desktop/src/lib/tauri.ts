@@ -186,6 +186,11 @@ export function fuzzySearch(query: string, limit?: number): Promise<SearchResult
   return invoke("fuzzy_search", { query, limit });
 }
 
+// Font commands
+export function listSystemFonts(): Promise<string[]> {
+  return invoke("list_system_fonts");
+}
+
 // Settings commands
 export function getSettings(): Promise<Record<string, unknown>> {
   return invoke("get_settings");
