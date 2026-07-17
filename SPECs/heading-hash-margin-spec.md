@@ -13,6 +13,14 @@ on the margin hash places the caret in the hash region; selection across the
 heading boundary highlights them correctly. Visual style is muted (~`var
 (--text-muted)`) and at the same font size as the heading text.
 
+**Visibility (amended 2026-07-17):** margin hashes show only while the caret
+is on the heading line. When the caret is elsewhere they are faded with
+`opacity: 0` — never with prosemark's `font-size: 0` hide, which collapses
+the hash rect to zero height and breaks vertical caret motion (see the
+ArrowUp-skips-heading fix in `prosemark-theme.css`). Prosemark's hide spec
+nests `.cm-hidden-token` inside `.cm-heading-hash` exactly when the caret is
+off the line, so that nested span is the CSS signal for the caret-off state.
+
 ## Current Behavior
 
 Hash characters are managed by `@prosemark/core`'s default hide spec

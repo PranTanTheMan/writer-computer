@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-17
+
+- Hide the margin heading `#` markers unless the caret is on the heading line. Restoring the hanging-hash rendering (2026-07-11) made every heading show its muted hash markers all the time; they now fade in only while editing the heading. The hide uses `opacity` rather than the `font-size: 0` collapse, so the ArrowUp caret-motion fix that surfaced them is preserved.
+
 ## 2026-07-11
 
 - Fix ArrowUp from the line below a heading sometimes skipping the heading and landing above it. The hidden `#` hash markers nested a `font-size: 0` span inside the styled hash span, so the hash measured as a collapsed zero-height rect at the baseline; CodeMirror's vertical caret motion probes that rect to decide whether it landed inside the heading line, and for default-size headings (h4–h6) an ArrowUp from a blank line overshot it by ~1px and skipped the line. The fix also restores the intended left-margin hash rendering from the heading-hash-margin spec — hashes had been silently invisible, so headings now show their muted `#` markers hanging in the margin again.
