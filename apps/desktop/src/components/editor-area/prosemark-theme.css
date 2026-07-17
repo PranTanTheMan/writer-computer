@@ -223,12 +223,24 @@
    absolute positioning takes them out of the inline flow so the heading
    text starts at the line's left edge regardless of caret state.
 
-   `font-size: inherit !important` overrides prosemark's default hide spec,
-   which adds `.cm-hidden-token { font-size: 0px }` to the same range when
-   the caret is off the heading. Specificity ties (both 0,2,0) and the
-   runtime-injected theme is loaded after this stylesheet, so !important
-   pins the override and keeps the hash visible in the margin in both
-   caret-on and caret-off states. See heading-hash-margin-spec.md. */
+   Margin hashes show only while the caret is ON the heading line. Off the
+   line, prosemark's default hide spec adds `.cm-hidden-token` to the same
+   range; CodeMirror NESTS the marks (`.cm-heading-hash > .cm-hidden-token
+   > text`), so that inner span is the caret-off signal — we fade it with
+   `opacity: 0` (prosemark's own `.cm-transparent-token` technique).
+
+   The hash must be hidden with opacity, NEVER via `.cm-hidden-token`'s
+   `font-size: 0px` — hence the `font-size: inherit !important` overrides
+   on both the outer and the nested span (`inherit` on the outer span
+   alone leaves the inner one at 0px). A 0px hash isn't just invisible:
+   it measures as a collapsed zero-height rect at the baseline, and
+   CodeMirror's vertical caret motion (posAtCoords' line-padding check)
+   probes `coordsAt(lineFrom)` — the hash — to decide whether the probe
+   landed inside the heading line. With the collapsed rect, ArrowUp from
+   a blank line below a default-size heading (h4–h6) overshoots the
+   baseline by ~1px, the check rejects the heading line, and the caret
+   skips to the line above the heading.
+   See heading-hash-margin-spec.md. */
 .cm-editor .cm-markdown-heading {
   padding-top: 1rem;
 }
@@ -245,6 +257,11 @@
   white-space: pre;
   pointer-events: auto;
   font-size: inherit !important;
+}
+
+.cm-editor .cm-heading-hash .cm-hidden-token {
+  font-size: inherit !important;
+  opacity: 0;
 }
 
 /* Wiki-link autocomplete tooltip uses the UI font, not the editor font */

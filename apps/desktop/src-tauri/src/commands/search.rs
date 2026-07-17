@@ -229,6 +229,75 @@ pub fn fuzzy_search_impl(query: &str, index: &[IndexedFile], limit: usize) -> Ve
     fuzzy_search_from(query, index, limit).unwrap_or_default()
 }
 
+/// Find a file under `root` by case-insensitive basename. Used by Obsidian
+/// wiki image embeds (`![[image.png]]`), which reference attachments by bare
+/// filename regardless of where they live in the vault. The workspace file
+/// index only covers markdown, so this walks on demand (gitignore-aware,
+/// parallel) instead of maintaining a second media index plus watcher
+/// plumbing; callers cache positive results.
+///
+/// Deterministic on duplicates: the match with the fewest path components
+/// wins, ties broken lexicographically — "shortest path" like Obsidian.
+pub fn find_file_by_name_impl(root: &Path, file_name: &str) -> Option<PathBuf> {
+    let matches: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
+    let target = file_name.to_lowercase();
+
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get().min(8))
+        .unwrap_or(4);
+
+    let matches_ref = Arc::clone(&matches);
+    WalkBuilder::new(root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .threads(threads)
+        .build_parallel()
+        .run(move || {
+            let matches = Arc::clone(&matches_ref);
+            let target = target.clone();
+            Box::new(move |entry| {
+                let Ok(entry) = entry else {
+                    return ignore::WalkState::Continue;
+                };
+                if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                    if entry.file_name() == "node_modules" {
+                        return ignore::WalkState::Skip;
+                    }
+                    return ignore::WalkState::Continue;
+                }
+                if entry.file_type().is_some_and(|ft| ft.is_file())
+                    && entry.file_name().to_string_lossy().to_lowercase() == target
+                {
+                    matches.lock().push(entry.path().to_path_buf());
+                }
+                ignore::WalkState::Continue
+            })
+        });
+
+    let mut matches = Arc::try_unwrap(matches).unwrap().into_inner();
+    matches.sort_by(|a, b| {
+        let depth_a = a.components().count();
+        let depth_b = b.components().count();
+        depth_a.cmp(&depth_b).then_with(|| a.cmp(b))
+    });
+    matches.into_iter().next()
+}
+
+#[tauri::command]
+pub async fn find_file_by_name(
+    root: String,
+    file_name: String,
+) -> Result<Option<String>, AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(find_file_by_name_impl(Path::new(&root), &file_name)
+            .map(|path| path.to_string_lossy().to_string()))
+    })
+    .await
+    .map_err(|e| AppError::Io(e.to_string()))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,5 +410,36 @@ mod tests {
         let (index, _dirs) = index_workspace_test(dir.path());
         let results = fuzzy_search_impl("md", &index, 1);
         assert!(results.len() <= 1);
+    }
+
+    #[test]
+    fn test_find_file_by_name_case_insensitive() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("assets")).unwrap();
+        fs::write(dir.path().join("assets").join("Diagram.PNG"), [0u8]).unwrap();
+
+        let found = find_file_by_name_impl(dir.path(), "diagram.png").unwrap();
+        assert_eq!(found, dir.path().join("assets").join("Diagram.PNG"));
+    }
+
+    #[test]
+    fn test_find_file_by_name_prefers_shortest_path() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("a").join("b")).unwrap();
+        fs::write(dir.path().join("a").join("b").join("pic.png"), [0u8]).unwrap();
+        fs::write(dir.path().join("pic.png"), [0u8]).unwrap();
+
+        let found = find_file_by_name_impl(dir.path(), "pic.png").unwrap();
+        assert_eq!(found, dir.path().join("pic.png"));
+    }
+
+    #[test]
+    fn test_find_file_by_name_missing_and_hidden() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(dir.path().join(".git").join("hidden.png"), [0u8]).unwrap();
+
+        assert!(find_file_by_name_impl(dir.path(), "nope.png").is_none());
+        assert!(find_file_by_name_impl(dir.path(), "hidden.png").is_none());
     }
 }

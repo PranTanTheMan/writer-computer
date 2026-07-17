@@ -57,8 +57,12 @@ fn load_recent_files(app: &tauri::AppHandle) -> Vec<RecentEntry> {
     if !path.exists() {
         return Vec::new();
     }
-    let Ok(data) = std::fs::read_to_string(&path) else {
-        return Vec::new();
+    let data = match std::fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(error) => {
+            eprintln!("[recents] failed to read recent files list: {error}");
+            return Vec::new();
+        }
     };
     // Current format: array of { path, opened_at }.
     if let Ok(entries) = serde_json::from_str::<Vec<RecentEntry>>(&data) {
@@ -71,13 +75,18 @@ fn load_recent_files(app: &tauri::AppHandle) -> Vec<RecentEntry> {
             .map(|path| RecentEntry { path, opened_at: 0 })
             .collect();
     }
+    eprintln!("[recents] recent files list is corrupt; starting over");
     Vec::new()
 }
 
+// Write-to-temp + rename so a crash mid-write can't leave a truncated file
+// (a truncated file parses as neither format and reads back as empty).
 fn save_recent_files(app: &tauri::AppHandle, recents: &[RecentEntry]) -> Result<(), AppError> {
     let path = recent_files_path(app)?;
     let data = serde_json::to_string_pretty(recents).map_err(|e| AppError::Io(e.to_string()))?;
-    std::fs::write(&path, data)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, &path)?;
     Ok(())
 }
 
@@ -89,11 +98,15 @@ fn push_recent(recents: &mut Vec<RecentEntry>, path: String, opened_at: u64) {
     recents.truncate(MAX_RECENT_FILES);
 }
 
+// Match `markdown_file_entry`'s display filter (`.md` only) so every entry
+// this records can actually be shown by `get_recent_files_global` — entries
+// recorded under a wider filter were persisted but silently dropped at read
+// time, leaving the picker empty.
 fn is_markdown_file(path: &Path) -> bool {
     path.is_file()
-        && path.extension().is_some_and(|ext| {
-            ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
-        })
+        && path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
 }
 
 /// Record a file open into the global recents list. Non-markdown and
@@ -134,8 +147,12 @@ pub fn remove_recent_file(path: String, app: tauri::AppHandle) -> Result<(), App
 }
 
 /// Return the global recents as display-ready entries, most recent first.
-/// Files that no longer exist are pruned from the persisted list so dead
-/// entries don't accumulate.
+/// Entries whose file can't be stat-ed right now are filtered from the
+/// response but deliberately NOT removed from the persisted list: a stat
+/// failure can be transient (iCloud/Dropbox eviction, slow mounts, permission
+/// prompts at startup), and persisting the prune permanently wiped the list.
+/// The list is capped at MAX_RECENT_FILES, so dead entries are bounded and
+/// fall off the end naturally; the per-row remove affordance handles the rest.
 #[tauri::command]
 pub async fn get_recent_files_global(
     limit: Option<u32>,
@@ -146,17 +163,8 @@ pub async fn get_recent_files_global(
         let state = app.state::<AppState>();
         let _guard = state.recent_files_lock.lock();
         let recents = load_recent_files(&app);
-        let alive: Vec<RecentEntry> = recents
+        Ok(recents
             .iter()
-            .filter(|entry| Path::new(&entry.path).is_file())
-            .cloned()
-            .collect();
-        if alive.len() != recents.len() {
-            let _ = save_recent_files(&app, &alive);
-        }
-        Ok(alive
-            .iter()
-            .take(limit)
             .filter_map(|entry| {
                 markdown_file_entry(Path::new(&entry.path)).map(|file| RecentFile {
                     path: file.path,
@@ -165,6 +173,7 @@ pub async fn get_recent_files_global(
                     opened_at: entry.opened_at,
                 })
             })
+            .take(limit)
             .collect())
     })
     .await

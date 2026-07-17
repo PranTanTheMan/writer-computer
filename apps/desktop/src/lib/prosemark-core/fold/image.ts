@@ -1,7 +1,44 @@
-import { Decoration, WidgetType } from "@codemirror/view";
+import { Decoration, type EditorView, WidgetType } from "@codemirror/view";
 import { normalizeMarkdownDestination } from "@/lib/paths";
 import { foldableSyntaxFacet, selectAllDecorationsOnSelectExtension } from "./core";
 import { iterChildren } from "../utils";
+
+// Last measured widget height per markdown destination. Images decode async,
+// so without a remembered height every scroll past an unloaded image inserts
+// a ~1-line placeholder that later snaps to natural size and shifts the
+// heightmap under the viewport (the "jumpy scroll"). The cache survives
+// widget rebuilds and re-opens of the same document.
+const imageHeightCache = new Map<string, number>();
+
+/** Shared height-stability wiring for async-loading editor images (markdown
+ *  images and wiki embeds): reserve the last measured height for `cacheKey`
+ *  until this element (re)decodes, record the settled height, and ask the
+ *  view to re-measure so its scroll anchoring compensates. `load` can fire
+ *  more than once when a resolver rewrites `src` after insertion; the last
+ *  one wins. */
+export function attachStableImageHeight(
+  image: HTMLImageElement,
+  container: HTMLElement,
+  cacheKey: string,
+  view: EditorView,
+): void {
+  const cached = imageHeightCache.get(cacheKey);
+  if (cached !== undefined) {
+    image.style.height = `${cached}px`;
+  }
+  image.addEventListener("load", () => {
+    image.style.height = "";
+    const height = container.getBoundingClientRect().height;
+    if (height > 0) {
+      imageHeightCache.set(cacheKey, height);
+    }
+    view.requestMeasure();
+  });
+  image.addEventListener("error", () => {
+    image.style.height = "";
+    view.requestMeasure();
+  });
+}
 
 class ImageWidget extends WidgetType {
   constructor(
@@ -15,13 +52,18 @@ class ImageWidget extends WidgetType {
     return this.url === other.url && this.block === other.block;
   }
 
-  toDOM() {
+  get estimatedHeight(): number {
+    return imageHeightCache.get(this.url) ?? -1;
+  }
+
+  toDOM(view: EditorView) {
     const elem = document.createElement(this.block ? "div" : "span");
     elem.className = "cm-image";
     if (this.block) {
       elem.className += " cm-image-block";
     }
     const image = document.createElement("img");
+    attachStableImageHeight(image, elem, this.url, view);
     image.src = this.url;
     elem.appendChild(image);
     return elem;
@@ -68,3 +110,7 @@ export const imageExtension = [
   }),
   selectAllDecorationsOnSelectExtension("cm-image"),
 ];
+
+export const __testImage = {
+  imageHeightCache,
+};

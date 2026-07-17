@@ -564,6 +564,7 @@ pub fn run() {
             commands::recents::get_recent_files_global,
             commands::search::index_workspace,
             commands::search::fuzzy_search,
+            commands::search::find_file_by_name,
             commands::images::save_clipboard_image,
             commands::settings::get_settings,
             commands::settings::get_setting,
