@@ -558,6 +558,7 @@ pub fn run() {
             commands::workspace::load_session,
             commands::workspace::open_file_in_standalone_window,
             commands::workspace::watch_standalone_file,
+            commands::fonts::list_system_fonts,
             commands::recents::record_recent_file,
             commands::recents::remove_recent_file,
             commands::recents::get_recent_files_global,

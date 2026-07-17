@@ -112,7 +112,7 @@
       "label": "UI font",
       "description": "Light theme UI font stack",
       "category": "Theme",
-      "type": "string",
+      "type": "font",
       "cssVar": "--ui-font",
       "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
     },
@@ -121,9 +121,18 @@
       "label": "Editor font",
       "description": "Light theme editor body font stack",
       "category": "Theme",
-      "type": "string",
+      "type": "font",
       "cssVar": "--editor-font",
       "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
+    },
+    {
+      "key": "theme.light.mono-font",
+      "label": "Monospace font",
+      "description": "Light theme monospace font stack for code and inline code",
+      "category": "Theme",
+      "type": "font",
+      "cssVar": "--mono-font",
+      "default": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
     },
     {
       "key": "theme.light.translucent",
@@ -188,7 +197,7 @@
       "label": "UI font",
       "description": "Dark theme UI font stack",
       "category": "Theme",
-      "type": "string",
+      "type": "font",
       "cssVar": "--ui-font",
       "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
     },
@@ -197,9 +206,18 @@
       "label": "Editor font",
       "description": "Dark theme editor body font stack",
       "category": "Theme",
-      "type": "string",
+      "type": "font",
       "cssVar": "--editor-font",
       "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
+    },
+    {
+      "key": "theme.dark.mono-font",
+      "label": "Monospace font",
+      "description": "Dark theme monospace font stack for code and inline code",
+      "category": "Theme",
+      "type": "font",
+      "cssVar": "--mono-font",
+      "default": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
     },
     {
       "key": "theme.dark.translucent",

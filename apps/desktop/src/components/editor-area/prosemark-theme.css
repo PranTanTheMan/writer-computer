@@ -5,7 +5,7 @@
   --pm-link-color: var(--link-color);
   --pm-muted-color: var(--text-muted);
   --pm-code-background-color: var(--code-bg);
-  --pm-code-font: "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --pm-code-font: var(--mono-font, "SF Mono", Menlo, Monaco, Consolas, monospace);
   --pm-code-btn-background-color: var(--item-hover-bg);
   --pm-code-btn-hover-background-color: var(--item-active-bg);
   --pm-blockquote-vertical-line-background-color: var(--blockquote-border);

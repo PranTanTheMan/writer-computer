@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { SettingDef } from "@/lib/settings-schema";
+import { FontControl } from "./font-control";
 
 interface SettingControlProps {
   def: SettingDef;
@@ -230,6 +231,8 @@ function Control({
       return <NumberControl value={value as number} onChange={onChange} />;
     case "string":
       return <StringControl value={value as string} onChange={onChange} />;
+    case "font":
+      return <FontControl def={def} value={value as string} onChange={onChange} />;
     case "enum":
       return (
         <EnumControl value={value as string} options={def.options ?? []} onChange={onChange} />
