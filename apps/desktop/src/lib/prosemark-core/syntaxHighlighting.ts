@@ -1,6 +1,7 @@
 import { EditorView } from "@codemirror/view";
 import { styleTags, Tag, tags } from "@lezer/highlight";
 import { markdownTags } from "./markdown/tags";
+import { mathDelimiterTag, mathFormulaTag } from "./markdown/mathMarkdown";
 import { HighlightStyle, syntaxHighlighting, type TagStyle } from "@codemirror/language";
 import type { MarkdownConfig } from "@lezer/markdown";
 
@@ -72,6 +73,15 @@ export const baseSyntaxHighlights = syntaxHighlighting(
       color: "var(--pm-link-color)",
       textDecoration: "underline",
       cursor: "pointer",
+    },
+    {
+      tag: mathDelimiterTag,
+      color: "var(--pm-muted-color)",
+    },
+    {
+      tag: mathFormulaTag,
+      fontFamily: codeFontFamily,
+      fontSize: editorFontSize,
     },
   ]),
 );
