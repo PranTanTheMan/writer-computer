@@ -286,8 +286,54 @@ impl Settings {
 
         // Migrate from old preferences.json if it exists and config doesn't
         settings.migrate_from_preferences(&global_config_dir);
+        settings.migrate_theme_fonts();
 
         settings
+    }
+
+    /// One-time migration: font stacks used to be per-mode theme primaries
+    /// (`theme.{light,dark}.{ui,editor,mono}-font`); they are now the global
+    /// `fonts.*` settings shared by both modes. For each slot, adopt the old
+    /// light value (dark as fallback) unless the new key is already set, then
+    /// drop the old keys from the global config. Old keys are kept on a failed
+    /// write so a later launch can retry.
+    fn migrate_theme_fonts(&mut self) {
+        const FONT_SLOTS: [(&str, &str, &str); 3] = [
+            ("fonts.ui", "theme.light.ui-font", "theme.dark.ui-font"),
+            (
+                "fonts.editor",
+                "theme.light.editor-font",
+                "theme.dark.editor-font",
+            ),
+            (
+                "fonts.mono",
+                "theme.light.mono-font",
+                "theme.dark.mono-font",
+            ),
+        ];
+        for (new_key, light_key, dark_key) in FONT_SLOTS {
+            let old = self
+                .global
+                .get(light_key)
+                .or_else(|| self.global.get(dark_key))
+                .cloned();
+            let Some(value) = old else {
+                continue;
+            };
+            if !self.global.contains_key(new_key) {
+                if let Err(error) = self.set_global(new_key, value) {
+                    eprintln!("[config] failed to migrate {new_key}: {error}");
+                    continue;
+                }
+            }
+            for old_key in [light_key, dark_key] {
+                if self.global.contains_key(old_key) {
+                    if let Err(error) = self.reset_global(old_key) {
+                        eprintln!("[config] failed to drop migrated {old_key}: {error}");
+                    }
+                }
+            }
+        }
     }
 
     /// One-time migration: read theme from old `preferences.json` (tauri-plugin-store format)
@@ -559,6 +605,51 @@ mod tests {
         assert_eq!(
             settings.get("editor.font-size"),
             Some(&ConfigValue::Number(18.0))
+        );
+    }
+
+    #[test]
+    fn test_theme_font_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config"),
+            "theme.light.editor-font = Georgia, serif\n\
+             theme.dark.editor-font = Iowan Old Style, serif\n\
+             theme.dark.mono-font = Fira Code, monospace\n",
+        )
+        .unwrap();
+
+        let settings = Settings::new(dir.path().to_path_buf());
+
+        // Light wins when both modes were customized; dark is the fallback.
+        assert_eq!(
+            settings.get("fonts.editor"),
+            Some(&ConfigValue::String("Georgia, serif".into()))
+        );
+        assert_eq!(
+            settings.get("fonts.mono"),
+            Some(&ConfigValue::String("Fira Code, monospace".into()))
+        );
+        // Untouched slot falls back to the schema default.
+        assert_eq!(settings.get("fonts.ui"), settings.defaults.get("fonts.ui"));
+
+        // Old keys are gone from the config file and from the merged view.
+        let raw = std::fs::read_to_string(dir.path().join("config")).unwrap();
+        assert!(!raw.contains("theme.light.editor-font"));
+        assert!(!raw.contains("theme.dark.editor-font"));
+        assert!(!raw.contains("theme.dark.mono-font"));
+        assert!(settings.get("theme.light.editor-font").is_none());
+
+        // Migration is idempotent: an already-set new key is not overwritten.
+        std::fs::write(
+            dir.path().join("config"),
+            "fonts.editor = Palatino, serif\ntheme.light.editor-font = Georgia, serif\n",
+        )
+        .unwrap();
+        let settings = Settings::new(dir.path().to_path_buf());
+        assert_eq!(
+            settings.get("fonts.editor"),
+            Some(&ConfigValue::String("Palatino, serif".into()))
         );
     }
 

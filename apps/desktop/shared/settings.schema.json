@@ -72,6 +72,33 @@
       "default": "full"
     },
     {
+      "key": "fonts.ui",
+      "label": "UI font",
+      "description": "UI font stack, shared by light and dark themes",
+      "category": "Fonts",
+      "type": "font",
+      "cssVar": "--ui-font",
+      "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
+    },
+    {
+      "key": "fonts.editor",
+      "label": "Editor font",
+      "description": "Editor body font stack, shared by light and dark themes",
+      "category": "Fonts",
+      "type": "font",
+      "cssVar": "--editor-font",
+      "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
+    },
+    {
+      "key": "fonts.mono",
+      "label": "Monospace font",
+      "description": "Monospace font stack for code and inline code, shared by light and dark themes",
+      "category": "Fonts",
+      "type": "font",
+      "cssVar": "--mono-font",
+      "default": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+    },
+    {
       "key": "theme.light.preset",
       "label": "Preset",
       "description": "Light theme preset",
@@ -106,33 +133,6 @@
       "type": "color",
       "cssVar": "--fg-base",
       "default": "#0D0D0D"
-    },
-    {
-      "key": "theme.light.ui-font",
-      "label": "UI font",
-      "description": "Light theme UI font stack",
-      "category": "Theme",
-      "type": "font",
-      "cssVar": "--ui-font",
-      "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
-    },
-    {
-      "key": "theme.light.editor-font",
-      "label": "Editor font",
-      "description": "Light theme editor body font stack",
-      "category": "Theme",
-      "type": "font",
-      "cssVar": "--editor-font",
-      "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
-    },
-    {
-      "key": "theme.light.mono-font",
-      "label": "Monospace font",
-      "description": "Light theme monospace font stack for code and inline code",
-      "category": "Theme",
-      "type": "font",
-      "cssVar": "--mono-font",
-      "default": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
     },
     {
       "key": "theme.light.translucent",
@@ -191,33 +191,6 @@
       "type": "color",
       "cssVar": "--fg-base",
       "default": "#FCFCFC"
-    },
-    {
-      "key": "theme.dark.ui-font",
-      "label": "UI font",
-      "description": "Dark theme UI font stack",
-      "category": "Theme",
-      "type": "font",
-      "cssVar": "--ui-font",
-      "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
-    },
-    {
-      "key": "theme.dark.editor-font",
-      "label": "Editor font",
-      "description": "Dark theme editor body font stack",
-      "category": "Theme",
-      "type": "font",
-      "cssVar": "--editor-font",
-      "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
-    },
-    {
-      "key": "theme.dark.mono-font",
-      "label": "Monospace font",
-      "description": "Dark theme monospace font stack for code and inline code",
-      "category": "Theme",
-      "type": "font",
-      "cssVar": "--mono-font",
-      "default": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
     },
     {
       "key": "theme.dark.translucent",
