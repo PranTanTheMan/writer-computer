@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { SettingDef } from "@/lib/settings-schema";
 import { FontControl } from "./font-control";
+import { SelectControl } from "./select-control";
 
 interface SettingControlProps {
   def: SettingDef;
@@ -67,19 +68,7 @@ function EnumControl({
   options: string[];
   onChange: (v: string) => void;
 }) {
-  return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="min-w-[140px] h-9 appearance-none rounded-lg border border-transparent bg-[var(--surface-input)] bg-[length:12px_12px] bg-[position:right_10px_center] bg-no-repeat pl-3 pr-8 text-[13px] text-[var(--text-secondary)] font-[inherit] outline-none focus:border-[var(--focus-border)] focus-visible:outline-none bg-[image:var(--select-chevron)]"
-    >
-      {options.map((opt) => (
-        <option key={opt} value={opt}>
-          {opt}
-        </option>
-      ))}
-    </select>
-  );
+  return <SelectControl value={value} options={options} onChange={onChange} />;
 }
 
 const HEX_RE = /^#([0-9a-f]{6}|[0-9a-f]{3})$/i;

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-18
+
+- Simplify the Typography font controls to ordinary installed-font selects matching the rest of Settings. Remove the separate AppKit Font panel and editable stack field; choosing a family still preserves the setting's existing CSS fallback tail. UI and editor now default to SF Pro, while the renamed Code font setting defaults to SF Mono.
+
 ## 2026-07-17
 
 - Typography is now configured once for all themes: the UI, editor, and monospace settings moved out of the per-mode Light/Dark theme cards into a single "Typography" section, so a font choice applies in both color modes. Existing per-mode customizations migrate automatically (the light value wins if the modes differed). On macOS, the chevron now opens the real system Font panel instead of a custom searchable combobox; a native pick replaces only the primary family and preserves an edited fallback stack. The stack remains directly editable, and rapid changes persist in order.

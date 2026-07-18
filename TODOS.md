@@ -6,6 +6,7 @@
 
 ## Done
 
+- Select-only Typography font controls: [`SPECs/font-select-spec.md`](SPECs/font-select-spec.md) — replace the AppKit Font panel and editable stack field with a standard installed-family `<select>` matching the other settings controls; default UI/editor to SF Pro and the renamed Code font setting to SF Mono.
 - Native macOS font picker + Typography settings: [`SPECs/native-font-picker-spec.md`](SPECs/native-font-picker-spec.md) — replace the custom installed-font combobox with AppKit's system Font panel, route selections back to the originating settings row/window, preserve editable CSS fallback stacks, and rename the settings section from Fonts to Typography.
 - Global font settings: [`SPECs/global-font-settings-spec.md`](SPECs/global-font-settings-spec.md) — the six per-mode `theme.{mode}.{ui,editor,mono}-font` settings become three global `fonts.{ui,editor,mono}` settings in a Typography section above the theme cards (fonts are typographic, not chromatic); startup migration adopts existing per-mode values (light wins, dark fallback) and drops the old keys. The font control is a single select-style pill (stack input + chevron in one surface).
 - Obsidian image embeds: [`SPECs/obsidian-image-embed-spec.md`](SPECs/obsidian-image-embed-spec.md) — `![[image.png]]` renders inline via the wiki-link decorator; path targets resolve workspace- then note-relative, bare basenames fall back to an on-demand case-insensitive basename walk (`find_file_by_name`, shortest path wins), unresolved embeds show the raw source as a muted placeholder.

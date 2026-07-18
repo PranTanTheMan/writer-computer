@@ -18,16 +18,53 @@ describe("typography settings", () => {
   test("keep their persisted keys and CSS bindings under the Typography category", () => {
     const fonts = SETTINGS_SCHEMA.filter((def) => def.key.startsWith("fonts.")).map((def) => ({
       key: def.key,
+      label: def.label,
       category: def.category,
       type: def.type,
       cssVar: def.cssVar,
     }));
 
     expect(fonts).toEqual([
-      { key: "fonts.ui", category: "Typography", type: "font", cssVar: "--ui-font" },
-      { key: "fonts.editor", category: "Typography", type: "font", cssVar: "--editor-font" },
-      { key: "fonts.mono", category: "Typography", type: "font", cssVar: "--mono-font" },
+      {
+        key: "fonts.ui",
+        label: "UI font",
+        category: "Typography",
+        type: "font",
+        cssVar: "--ui-font",
+      },
+      {
+        key: "fonts.editor",
+        label: "Editor font",
+        category: "Typography",
+        type: "font",
+        cssVar: "--editor-font",
+      },
+      {
+        key: "fonts.mono",
+        label: "Code font",
+        category: "Typography",
+        type: "font",
+        cssVar: "--mono-font",
+      },
     ]);
+  });
+
+  test("default to SF Pro for prose and SF Mono for code", () => {
+    const defaults = Object.fromEntries(
+      SETTINGS_SCHEMA.filter((def) => def.key.startsWith("fonts.")).map((def) => [
+        def.key,
+        String(def.default),
+      ]),
+    );
+
+    const proseFallback =
+      '-apple-system-body, ui-sans-serif, -apple-system, system-ui, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol"';
+    const monoFallback =
+      'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
+    expect(defaults["fonts.ui"]).toBe(`"SF Pro", ${proseFallback}`);
+    expect(defaults["fonts.editor"]).toBe(`"SF Pro", ${proseFallback}`);
+    expect(defaults["fonts.mono"]).toBe(`"SF Mono", ${monoFallback}`);
   });
 });
 

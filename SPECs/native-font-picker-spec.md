@@ -1,5 +1,9 @@
 # Native Font Picker Spec
 
+> Superseded on 2026-07-18 by the select-only design in
+> [`font-select-spec.md`](font-select-spec.md). This file records the previous
+> AppKit implementation decision.
+
 ## Goal
 
 Replace the settings panel's custom installed-font combobox with the native

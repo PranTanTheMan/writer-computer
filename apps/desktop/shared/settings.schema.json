@@ -78,7 +78,7 @@
       "category": "Typography",
       "type": "font",
       "cssVar": "--ui-font",
-      "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
+      "default": "\"SF Pro\", -apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
     },
     {
       "key": "fonts.editor",
@@ -87,16 +87,16 @@
       "category": "Typography",
       "type": "font",
       "cssVar": "--editor-font",
-      "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
+      "default": "\"SF Pro\", -apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
     },
     {
       "key": "fonts.mono",
-      "label": "Monospace font",
+      "label": "Code font",
       "description": "Font family and fallback stack used for code",
       "category": "Typography",
       "type": "font",
       "cssVar": "--mono-font",
-      "default": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+      "default": "\"SF Mono\", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
     },
     {
       "key": "theme.light.preset",

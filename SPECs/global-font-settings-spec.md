@@ -37,13 +37,12 @@ drift apart).
 
 ## Unified font control
 
-`FontControl` is one select-style pill: a single `--surface-input` container
-(border on `:focus-within`) holding a transparent text input and, on macOS, a
-chevron that opens the system Font panel. Free text edits the raw stack; a
-native pick replaces the primary family while preserving the current edited
-fallback tail. Non-macOS platforms keep the editable stack without a custom
-picker imitation. See [`native-font-picker-spec.md`](native-font-picker-spec.md)
-for panel routing and lifecycle details.
+`FontControl` is an ordinary HTML select styled like the other enum settings.
+It lists installed families from the cached `list_system_fonts` command on all
+desktop platforms. Choosing a family replaces the stored stack's primary
+family while preserving its fallback tail. If the current primary is not in
+the enumeration, it remains available as the selected option. See
+[`font-select-spec.md`](font-select-spec.md).
 
 ## Test Plan
 

@@ -192,21 +192,9 @@ export function fuzzySearch(query: string, limit?: number): Promise<SearchResult
   return invoke("fuzzy_search", { query, limit });
 }
 
-// Native font panel commands (macOS only; the frontend hides the trigger on
-// other platforms so these commands are never invoked there).
-export interface NativeFontSelection {
-  requestId: string;
-  family: string;
-}
-
-export const NATIVE_FONT_SELECTED_EVENT = "font:selected";
-
-export function openNativeFontPanel(requestId: string, family: string): Promise<void> {
-  return invoke("open_native_font_panel", { requestId, family });
-}
-
-export function closeNativeFontPanel(requestId: string): Promise<void> {
-  return invoke("close_native_font_panel", { requestId });
+// Font commands
+export function listSystemFonts(): Promise<string[]> {
+  return invoke("list_system_fonts");
 }
 
 // Settings commands

@@ -1,4 +1,3 @@
-#[cfg(target_os = "macos")]
 pub mod fonts;
 pub mod fs;
 pub mod images;
