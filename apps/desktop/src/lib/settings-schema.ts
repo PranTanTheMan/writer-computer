@@ -69,15 +69,7 @@ export const SETTINGS_SCHEMA: SettingDef[] = schemaFile.settings as SettingDef[]
 
 export type ThemeMode = "light" | "dark";
 
-export type PrimarySuffix =
-  | "accent"
-  | "background"
-  | "foreground"
-  | "ui-font"
-  | "editor-font"
-  | "mono-font"
-  | "translucent"
-  | "contrast";
+export type PrimarySuffix = "accent" | "background" | "foreground" | "translucent" | "contrast";
 
 /** A flat record keyed by the kebab-case suffix of `theme.{mode}.{suffix}`.
  *  Mirrors the JSON schema names so iteration code uses the same key as the

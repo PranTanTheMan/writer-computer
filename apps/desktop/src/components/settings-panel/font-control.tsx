@@ -20,9 +20,10 @@ interface PickerPosition {
   right: number;
 }
 
-/** Font-stack control: a free-text stack input plus a picker listing every
- *  font installed on the system. Picking a family swaps the stack's primary
- *  family and keeps the schema default as the fallback tail. */
+/** Font-stack control: a free-text stack input and an installed-font picker
+ *  presented as one select-style pill (matching `EnumControl`'s chevron).
+ *  Picking a family swaps the stack's primary family and keeps the schema
+ *  default as the fallback tail. */
 export function FontControl({ def, value, onChange }: FontControlProps) {
   const [pickerPos, setPickerPos] = useState<PickerPosition | null>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -37,20 +38,23 @@ export function FontControl({ def, value, onChange }: FontControlProps) {
   }
 
   return (
-    <div ref={anchorRef} className="flex items-center gap-1">
+    <div
+      ref={anchorRef}
+      className="inline-flex h-9 w-64 items-center rounded-lg border border-transparent bg-[var(--surface-input)] focus-within:border-[var(--focus-border)]"
+    >
       <input
         type="text"
         value={value}
         aria-label="Font stack"
         onChange={(e) => onChange(e.target.value)}
-        className="h-9 w-56 rounded-lg border border-transparent bg-[var(--surface-input)] px-3 text-[13px] text-[var(--text-secondary)] font-[inherit] outline-none focus:border-[var(--focus-border)] focus-visible:outline-none"
+        className="h-full min-w-0 flex-1 bg-transparent pl-3 pr-1 text-[13px] text-[var(--text-secondary)] font-[inherit] outline-none focus-visible:outline-none"
       />
       <button
         type="button"
         onClick={togglePicker}
         aria-label="Choose installed font"
         aria-expanded={pickerPos !== null}
-        className="h-9 w-8 shrink-0 rounded-lg bg-[var(--surface-input)] bg-[image:var(--select-chevron)] bg-[length:12px_12px] bg-center bg-no-repeat hover:bg-[var(--surface-subtle-strong)]"
+        className="h-full w-8 shrink-0 rounded-r-lg bg-[image:var(--select-chevron)] bg-[length:12px_12px] bg-center bg-no-repeat hover:bg-[var(--surface-subtle-strong)]"
       />
       {pickerPos &&
         createPortal(

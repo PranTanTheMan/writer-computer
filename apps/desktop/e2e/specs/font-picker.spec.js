@@ -44,13 +44,11 @@ describe("Settings font picker", function () {
     await $("[data-settings-panel]").waitForExist({ timeout: 5_000 });
   });
 
-  it("lists installed fonts in the picker for the active mode's monospace font", async function () {
-    // Pick the theme card matching the active mode so the CSS var assertion
-    // below observes the change.
-    const mode = await browser.execute(() => document.documentElement.getAttribute("data-theme"));
-    const heading = mode === "dark" ? "Dark Theme" : "Light Theme";
+  it("lists installed fonts in the picker for the monospace font", async function () {
+    // Fonts are global settings (shared across light/dark), rendered in the
+    // "Fonts" section above the theme cards.
     const monoPickerButton = await $(
-      `//section[.//h2[contains(., "${heading}")]]` +
+      `//section[.//h2[contains(., "Fonts")]]` +
         `//div[div/div[text()="Monospace font"]]//button[@aria-label="Choose installed font"]`,
     );
     await monoPickerButton.scrollIntoView({ block: "center" });
@@ -85,17 +83,15 @@ describe("Settings font picker", function () {
     await browser.waitUntil(async () => !(await popover.isExisting()), { timeout: 5_000 });
 
     // The row's stack input now leads with the picked family, default tail kept.
-    const mode = await browser.execute(() => document.documentElement.getAttribute("data-theme"));
-    const heading = mode === "dark" ? "Dark Theme" : "Light Theme";
     const stackInput = await $(
-      `//section[.//h2[contains(., "${heading}")]]` +
+      `//section[.//h2[contains(., "Fonts")]]` +
         `//div[div/div[text()="Monospace font"]]//input[@aria-label="Font stack"]`,
     );
     const stack = await stackInput.getValue();
     ok(stack.startsWith("Menlo,"), `stack should lead with Menlo: ${stack}`);
     ok(stack.includes("monospace"), `stack should keep the generic tail: ${stack}`);
 
-    // The active mode's --mono-font CSS var picked it up (theme.ts applyPrimaries).
+    // The global --mono-font CSS var picked it up (theme.ts applyCssVarBindings).
     const cssVar = await browser.execute(() =>
       getComputedStyle(document.documentElement).getPropertyValue("--mono-font"),
     );
@@ -107,7 +103,7 @@ describe("Settings font picker", function () {
         .invoke("get_setting", { key })
         .then((v) => done(JSON.stringify(v)))
         .catch((e) => done(`ERROR: ${e && e.message ? e.message : String(e)}`));
-    }, `theme.${mode}.mono-font`);
+    }, "fonts.mono");
     ok(String(persisted).includes("Menlo"), `persisted setting should contain Menlo: ${persisted}`);
     console.log(`[verify] stack="${stack}" cssVar="${cssVar.trim()}" persisted=${persisted}`);
     if (process.env.VERIFY_SHOT_DIR) {
@@ -139,10 +135,8 @@ describe("Settings font picker", function () {
   });
 
   it("probe: free-text stack editing still works and reaches the CSS variable", async function () {
-    const mode = await browser.execute(() => document.documentElement.getAttribute("data-theme"));
-    const heading = mode === "dark" ? "Dark Theme" : "Light Theme";
     const stackInput = await $(
-      `//section[.//h2[contains(., "${heading}")]]` +
+      `//section[.//h2[contains(., "Fonts")]]` +
         `//div[div/div[text()="Monospace font"]]//input[@aria-label="Font stack"]`,
     );
     await stackInput.scrollIntoView({ block: "center" });
