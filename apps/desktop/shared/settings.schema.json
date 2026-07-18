@@ -74,8 +74,8 @@
     {
       "key": "fonts.ui",
       "label": "UI font",
-      "description": "UI font stack, shared by light and dark themes",
-      "category": "Fonts",
+      "description": "Font family and fallback stack used throughout the app",
+      "category": "Typography",
       "type": "font",
       "cssVar": "--ui-font",
       "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
@@ -83,8 +83,8 @@
     {
       "key": "fonts.editor",
       "label": "Editor font",
-      "description": "Editor body font stack, shared by light and dark themes",
-      "category": "Fonts",
+      "description": "Font family and fallback stack used for document text",
+      "category": "Typography",
       "type": "font",
       "cssVar": "--editor-font",
       "default": "-apple-system-body, ui-sans-serif, -apple-system, system-ui, \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\""
@@ -92,8 +92,8 @@
     {
       "key": "fonts.mono",
       "label": "Monospace font",
-      "description": "Monospace font stack for code and inline code, shared by light and dark themes",
-      "category": "Fonts",
+      "description": "Font family and fallback stack used for code",
+      "category": "Typography",
       "type": "font",
       "cssVar": "--mono-font",
       "default": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"

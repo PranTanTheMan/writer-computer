@@ -21,29 +21,37 @@ describe("firstFamily", () => {
 });
 
 describe("stackWithFamily", () => {
-  test("prepends the picked family to the default stack", () => {
-    expect(stackWithFamily("Menlo", "ui-monospace, monospace")).toBe(
-      "Menlo, ui-monospace, monospace",
+  test("replaces the primary family and preserves the current tail", () => {
+    expect(stackWithFamily("Menlo", "ui-monospace, monospace")).toBe("Menlo, monospace");
+    expect(stackWithFamily("Menlo", 'Custom, Georgia, "Times New Roman", serif')).toBe(
+      'Menlo, Georgia, "Times New Roman", serif',
     );
   });
 
   test("quotes families that are not plain CSS idents", () => {
-    expect(stackWithFamily("JetBrains Mono", "monospace")).toBe('"JetBrains Mono", monospace');
-    expect(stackWithFamily("Comic Sans MS", "sans-serif")).toBe('"Comic Sans MS", sans-serif');
+    expect(stackWithFamily("JetBrains Mono", "Old, monospace")).toBe('"JetBrains Mono", monospace');
+    expect(stackWithFamily("Comic Sans MS", "Old, sans-serif")).toBe('"Comic Sans MS", sans-serif');
   });
 
-  test("drops a duplicate of the picked family from the default tail", () => {
+  test("drops a duplicate of the picked family from the current tail", () => {
     expect(stackWithFamily("Menlo", MONO_DEFAULT)).toBe(
-      'Menlo, ui-monospace, SFMono-Regular, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+      'Menlo, SFMono-Regular, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
     );
     expect(stackWithFamily("Courier New", 'Menlo, "Courier New", monospace')).toBe(
-      '"Courier New", Menlo, monospace',
+      '"Courier New", monospace',
     );
   });
 
   test("repeated picks do not grow the stack", () => {
     const once = stackWithFamily("Fira Code", MONO_DEFAULT);
-    const twice = stackWithFamily("JetBrains Mono", MONO_DEFAULT);
-    expect(twice.split(",").length).toBe(once.split(",").length);
+    const twice = stackWithFamily("JetBrains Mono", once);
+    expect(twice).toBe(
+      '"JetBrains Mono", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+    );
+  });
+
+  test("handles a one-family or empty stack", () => {
+    expect(stackWithFamily("Menlo", "Old")).toBe("Menlo");
+    expect(stackWithFamily("Menlo", "")).toBe("Menlo");
   });
 });

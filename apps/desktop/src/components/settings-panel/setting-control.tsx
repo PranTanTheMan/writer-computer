@@ -5,7 +5,7 @@ import { FontControl } from "./font-control";
 interface SettingControlProps {
   def: SettingDef;
   value: unknown;
-  onChange: (value: unknown) => void;
+  onChange: (value: unknown) => void | Promise<void>;
   onReset: () => void;
   isModified: boolean;
 }
@@ -222,7 +222,7 @@ function Control({
 }: {
   def: SettingDef;
   value: unknown;
-  onChange: (value: unknown) => void;
+  onChange: (value: unknown) => void | Promise<void>;
 }) {
   switch (def.type) {
     case "boolean":

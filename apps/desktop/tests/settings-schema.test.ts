@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vite-plus/test";
-import { getPrimaryDefs, suffixOf, type ThemeMode } from "../src/lib/settings-schema";
+import {
+  getPrimaryDefs,
+  SETTINGS_SCHEMA,
+  suffixOf,
+  type ThemeMode,
+} from "../src/lib/settings-schema";
 
 // Every preset folder ships one JSON per mode holding exactly the editable
 // primaries. Glob-load them the same way a preset picker would so adding a
@@ -7,6 +12,23 @@ import { getPrimaryDefs, suffixOf, type ThemeMode } from "../src/lib/settings-sc
 const presetFiles = import.meta.glob<Record<string, unknown>>("../shared/themes/*/*.json", {
   eager: true,
   import: "default",
+});
+
+describe("typography settings", () => {
+  test("keep their persisted keys and CSS bindings under the Typography category", () => {
+    const fonts = SETTINGS_SCHEMA.filter((def) => def.key.startsWith("fonts.")).map((def) => ({
+      key: def.key,
+      category: def.category,
+      type: def.type,
+      cssVar: def.cssVar,
+    }));
+
+    expect(fonts).toEqual([
+      { key: "fonts.ui", category: "Typography", type: "font", cssVar: "--ui-font" },
+      { key: "fonts.editor", category: "Typography", type: "font", cssVar: "--editor-font" },
+      { key: "fonts.mono", category: "Typography", type: "font", cssVar: "--mono-font" },
+    ]);
+  });
 });
 
 describe("theme presets", () => {

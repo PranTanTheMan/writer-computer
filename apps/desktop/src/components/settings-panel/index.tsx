@@ -8,7 +8,7 @@ import { EditorScrollContainer } from "@/components/editor-area/editor-scroll-co
 /** Section that renders above the Themes block. The schema-driven section
  *  list is rendered in two passes — these come first, the Themes section
  *  comes next, and everything else is rendered after. */
-const SECTIONS_BEFORE_THEMES = ["Appearance", "Fonts"] as const;
+const SECTIONS_BEFORE_THEMES = ["Appearance", "Typography"] as const;
 
 export function SettingsPanel({ isActive }: { isActive: boolean }) {
   const settings = useAllSettings();
@@ -44,7 +44,7 @@ export function SettingsPanel({ isActive }: { isActive: boolean }) {
               <SettingControl
                 def={def}
                 value={settings[def.key]}
-                onChange={(value) => void setSetting(def.key, value)}
+                onChange={(value) => setSetting(def.key, value)}
                 onReset={() => void resetSetting(def.key)}
                 isModified={isModified(def)}
               />

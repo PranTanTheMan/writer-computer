@@ -6,17 +6,15 @@
 //! menu items without taking over the rest of the native menu behavior.
 
 use crate::commands::workspace::load_recent_workspaces;
+use crate::macos::{app_delegate, ns_string, ns_string_to_string};
 use objc2::ffi::class_addMethod;
 use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
 use objc2::{class, msg_send, sel};
-use std::ffi::CStr;
-use std::os::raw::c_char;
 use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
-const NS_UTF8_STRING_ENCODING: usize = 4;
 const DOCK_MENU_SIGNATURE: &[u8] = b"@@:@\0";
 const MENU_ACTION_SIGNATURE: &[u8] = b"v@:@\0";
 
@@ -42,17 +40,10 @@ pub(crate) fn install(app: &tauri::AppHandle) {
 }
 
 unsafe fn register_delegate_methods() -> bool {
-    let app: *mut AnyObject = unsafe { msg_send![class!(NSApplication), sharedApplication] };
-    if app.is_null() {
-        eprintln!("failed to install Dock menu: NSApplication unavailable");
+    let Some(delegate) = (unsafe { app_delegate() }) else {
+        eprintln!("failed to install Dock menu: application delegate unavailable");
         return false;
-    }
-
-    let delegate: *mut AnyObject = unsafe { msg_send![app, delegate] };
-    if delegate.is_null() {
-        eprintln!("failed to install Dock menu: NSApplication delegate unavailable");
-        return false;
-    }
+    };
 
     let delegate_class: *mut AnyClass = unsafe { msg_send![delegate, class] };
     if delegate_class.is_null() {
@@ -204,40 +195,6 @@ fn workspace_title(path: &str) -> String {
         .filter(|name| !name.is_empty())
         .unwrap_or(path)
         .to_string()
-}
-
-unsafe fn ns_string(value: &str) -> *mut AnyObject {
-    let string: *mut AnyObject = unsafe { msg_send![class!(NSString), alloc] };
-    if string.is_null() {
-        return ptr::null_mut();
-    }
-    let string: *mut AnyObject = unsafe {
-        msg_send![
-            string,
-            initWithBytes: value.as_ptr(),
-            length: value.len(),
-            encoding: NS_UTF8_STRING_ENCODING
-        ]
-    };
-    if string.is_null() {
-        return ptr::null_mut();
-    }
-    let _: *mut AnyObject = unsafe { msg_send![string, autorelease] };
-    string
-}
-
-unsafe fn ns_string_to_string(value: *mut AnyObject) -> Option<String> {
-    if value.is_null() {
-        return None;
-    }
-    let bytes: *const c_char = unsafe { msg_send![value, UTF8String] };
-    if bytes.is_null() {
-        return None;
-    }
-    unsafe { CStr::from_ptr(bytes) }
-        .to_str()
-        .ok()
-        .map(|s| s.to_string())
 }
 
 #[cfg(test)]

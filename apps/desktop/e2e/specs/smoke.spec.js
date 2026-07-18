@@ -9,20 +9,16 @@ import { join } from "node:path";
 // infrastructure validation, not feature coverage.
 describe("Writer app", function () {
   it("mounts the React app", async function () {
-    // Both the welcome screen and the editor branch render
-    // `<div class="animate-fade-in">` as the top-level wrapper once the
-    // startup state resolves (see apps/desktop/src/App.tsx). Asserting on
-    // that wrapper makes the test independent of whether the app restored a
-    // previous workspace.
-    const wrapper = await $(".animate-fade-in");
-    await wrapper.waitForExist({ timeout: 15_000 });
+    // App.tsx renders a fragment in both the welcome and editor branches, so
+    // wait for any React-owned child under the static index.html root.
+    await $("#root > *").waitForExist({ timeout: 15_000 });
   });
 
   it("creates a file and writes hello world via the Tauri IPC bridge", async function () {
     // Wait for the React app to be mounted; the IPC bridge is reachable as
     // soon as the WebView's JS context is alive, but waiting for mount
     // matches what a real interaction would see.
-    await $(".animate-fade-in").waitForExist({ timeout: 15_000 });
+    await $("#root > *").waitForExist({ timeout: 15_000 });
 
     // Use a fresh temp directory so this test never touches the user's
     // recent workspaces or the dev install state.
@@ -42,7 +38,7 @@ describe("Writer app", function () {
       // on success or an error message string on failure.
       const error = await browser.executeAsync(
         (path, content, done) => {
-          (async () => {
+          void (async () => {
             try {
               const { invoke } = window.__TAURI_INTERNALS__;
               await invoke("create_file", { path });

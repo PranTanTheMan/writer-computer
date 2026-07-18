@@ -4,6 +4,8 @@ mod config;
 mod dock_menu;
 mod error;
 mod ignore;
+#[cfg(target_os = "macos")]
+mod macos;
 pub mod open_target;
 mod state;
 #[cfg(desktop)]
@@ -61,6 +63,8 @@ fn attach_window_handlers(app: &tauri::AppHandle, window: &WebviewWindow) {
             }
         }
         WindowEvent::Destroyed => {
+            #[cfg(target_os = "macos")]
+            commands::fonts::close_for_window(&handle, &label);
             // Remove the state; the `WorkspaceState`'s `RecommendedWatcher`
             // drops on the last `Arc` release, unregistering FSEvents/inotify.
             handle.state::<AppState>().remove(&label);
@@ -518,6 +522,8 @@ pub fn run() {
                 install_app_menu(app.handle(), config_dir)?;
                 #[cfg(target_os = "macos")]
                 dock_menu::install(app.handle());
+                #[cfg(target_os = "macos")]
+                commands::fonts::install(app.handle());
 
                 // Kick off the launch check once the window is ready to show
                 // any follow-up dialogs on top of a visible app.
@@ -558,7 +564,10 @@ pub fn run() {
             commands::workspace::load_session,
             commands::workspace::open_file_in_standalone_window,
             commands::workspace::watch_standalone_file,
-            commands::fonts::list_system_fonts,
+            #[cfg(target_os = "macos")]
+            commands::fonts::open_native_font_panel,
+            #[cfg(target_os = "macos")]
+            commands::fonts::close_native_font_panel,
             commands::recents::record_recent_file,
             commands::recents::remove_recent_file,
             commands::recents::get_recent_files_global,

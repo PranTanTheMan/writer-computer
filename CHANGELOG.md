@@ -2,7 +2,7 @@
 
 ## 2026-07-17
 
-- Fonts are now picked once for all themes: the UI, editor, and monospace font settings moved out of the per-mode Light/Dark theme cards into a single "Fonts" section, so a font choice applies in both color modes. Existing per-mode font customizations migrate automatically (the light value wins if the modes differed). The font control is also a single unified input now — the stack text field and the installed-font picker share one select-style surface instead of sitting side by side as separate controls.
+- Typography is now configured once for all themes: the UI, editor, and monospace settings moved out of the per-mode Light/Dark theme cards into a single "Typography" section, so a font choice applies in both color modes. Existing per-mode customizations migrate automatically (the light value wins if the modes differed). On macOS, the chevron now opens the real system Font panel instead of a custom searchable combobox; a native pick replaces only the primary family and preserves an edited fallback stack. The stack remains directly editable, and rapid changes persist in order.
 - Hide the margin heading `#` markers unless the caret is on the heading line. Restoring the hanging-hash rendering (2026-07-11) made every heading show its muted hash markers all the time; they now fade in only while editing the heading. The hide uses `opacity` rather than the `font-size: 0` collapse, so the ArrowUp caret-motion fix that surfaced them is preserved.
 
 ## 2026-07-11

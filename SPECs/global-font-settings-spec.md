@@ -5,7 +5,7 @@
 Fonts are picked once, not per color mode. The three font stacks (UI, editor
 body, monospace) move out of the per-mode theme primaries
 (`theme.{light,dark}.{ui,editor,mono}-font`) into global settings
-(`fonts.ui`, `fonts.editor`, `fonts.mono`) in a new "Fonts" settings section
+(`fonts.ui`, `fonts.editor`, `fonts.mono`) in a new "Typography" settings section
 rendered between Appearance and the theme cards.
 
 Rationale: a font choice is typographic, not chromatic — users who set a
@@ -16,7 +16,7 @@ drift apart).
 ## Design
 
 - **Schema** (`shared/settings.schema.json`): the six `theme.*.{...}-font`
-  entries are replaced by three `fonts.*` entries, category `Fonts`, type
+  entries are replaced by three `fonts.*` entries, category `Typography`, type
   `font`, binding the same CSS variables (`--ui-font`, `--editor-font`,
   `--mono-font`). Because the keys no longer start with `theme.`, the
   generic `applyCssVarBindings` side effect (lib/theme.ts) pushes them to
@@ -25,7 +25,7 @@ drift apart).
   `accent | background | foreground | translucent | contrast`. Preset JSONs
   (`shared/themes/*/{light,dark}.json`) drop their font keys; the
   settings-schema test enforces exact preset/primary parity.
-- **Settings panel**: the "Fonts" category renders through the generic
+- **Settings panel**: the "Typography" category renders through the generic
   section renderer, ordered via `SECTIONS_BEFORE_THEMES` so it sits above
   the theme cards.
 - **Migration** (`config.rs::migrate_theme_fonts`, runs at startup): for
@@ -37,12 +37,13 @@ drift apart).
 
 ## Unified font control
 
-`FontControl` previously rendered a free-text stack input and a separate
-picker button as two detached surfaces. It is now one select-style pill:
-a single `--surface-input` container (border on `:focus-within`) holding a
-transparent text input and the chevron button, matching `EnumControl`'s
-chevron affordance. Behavior is unchanged: free text edits the raw stack;
-the picker swaps the primary family over the schema-default tail.
+`FontControl` is one select-style pill: a single `--surface-input` container
+(border on `:focus-within`) holding a transparent text input and, on macOS, a
+chevron that opens the system Font panel. Free text edits the raw stack; a
+native pick replaces the primary family while preserving the current edited
+fallback tail. Non-macOS platforms keep the editable stack without a custom
+picker imitation. See [`native-font-picker-spec.md`](native-font-picker-spec.md)
+for panel routing and lifecycle details.
 
 ## Test Plan
 
@@ -51,5 +52,5 @@ the picker swaps the primary family over the schema-default tail.
   idempotency (an existing `fonts.*` value is not overwritten).
 - `tests/settings-schema.test.ts` — preset/primary parity now excludes
   fonts.
-- `e2e/specs/font-picker.spec.js` — retargeted at the "Fonts" section and
+- `e2e/specs/font-picker.spec.js` — retargeted at the "Typography" section and
   the `fonts.mono` key.

@@ -1,36 +1,46 @@
 import { ok, strictEqual } from "node:assert/strict";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-// Font picker verification: drives the settings panel's new "font" controls —
-// the picker popover listing installed system fonts (backed by the
-// `list_system_fonts` IPC command) and the stack rewrite on pick.
-//
-// Requires a restorable workspace: seed
-// `~/Library/Application Support/com.writer-computer.e2e/recent_workspaces.json`
-// with a real directory before launching. Without one the app lands on the
-// welcome screen (where Settings is unreachable) and this suite self-skips,
-// so it stays safe inside the default `pnpm run test:e2e` sweep.
-describe("Settings font picker", function () {
+const E2E_WORKSPACE = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+
+// Native Font panel verification. WebDriver cannot inspect AppKit's separate
+// panel window, so the suite verifies the Typography UI and injects the same
+// scoped Tauri event the Rust callback emits after a native selection.
+describe("Settings native font picker", function () {
   let workspaceRestored = false;
 
   before(async function () {
-    // Workspace chrome (sidebar toggle) proves both mount and restore.
-    // (The smoke spec's `.animate-fade-in` wrapper no longer exists in App.tsx.)
+    workspaceRestored = await $('button[aria-label="Hide sidebar"]')
+      .waitForExist({ timeout: 3_000 })
+      .catch(() => false);
+    if (workspaceRestored) return;
+
+    // Keep the feature suite independent of the developer's recent-workspace
+    // file: initialize this process through the real IPC bridge, then reload
+    // so the frontend consumes the prepared startup state normally.
+    await browser.executeAsync((path, done) => {
+      window.__TAURI_INTERNALS__
+        .invoke("open_workspace", { path })
+        .then(() => done(null))
+        .catch((error) => done(error && error.message ? error.message : String(error)));
+    }, E2E_WORKSPACE);
+    await browser.refresh();
     workspaceRestored = await $('button[aria-label="Hide sidebar"]')
       .waitForExist({ timeout: 15_000 })
       .catch(() => false);
+    ok(workspaceRestored, "E2E workspace did not initialize");
   });
 
-  beforeEach(function () {
-    if (!workspaceRestored) this.skip();
-  });
-
-  /** Dispatch a synthetic Cmd+key so the app's document-level shortcut
-   *  handler fires (real key chords through the WebDriver bridge are flaky
-   *  on WKWebView). */
   async function pressCmd(key) {
-    await browser.execute((k) => {
+    await browser.execute((pressedKey) => {
       document.dispatchEvent(
-        new KeyboardEvent("keydown", { key: k, metaKey: true, bubbles: true, cancelable: true }),
+        new KeyboardEvent("keydown", {
+          key: pressedKey,
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
       );
     }, key);
   }
@@ -44,113 +54,97 @@ describe("Settings font picker", function () {
     await $("[data-settings-panel]").waitForExist({ timeout: 5_000 });
   });
 
-  it("lists installed fonts in the picker for the monospace font", async function () {
-    // Fonts are global settings (shared across light/dark), rendered in the
-    // "Fonts" section above the theme cards.
-    const monoPickerButton = await $(
-      `//section[.//h2[contains(., "Fonts")]]` +
-        `//div[div/div[text()="Monospace font"]]//button[@aria-label="Choose installed font"]`,
-    );
-    await monoPickerButton.scrollIntoView({ block: "center" });
-    await monoPickerButton.click();
+  it("renders one Typography section with row-specific native triggers", async function () {
+    const typography = await $('//section[.//h2[normalize-space()="Typography"]]');
+    await typography.waitForExist({ timeout: 5_000 });
+    strictEqual((await $$('//section[.//h2[normalize-space()="Typography"]]')).length, 1);
+    strictEqual((await $$('//section[.//h2[normalize-space()="Fonts"]]')).length, 0);
 
-    const popover = await $('[role="dialog"][aria-label="Installed fonts"]');
-    await popover.waitForExist({ timeout: 5_000 });
-
-    // Options load async through the list_system_fonts IPC round trip.
-    await browser.waitUntil(async () => (await popover.$$('[role="option"]')).length > 0, {
-      timeout: 10_000,
-      timeoutMsg: "no installed fonts appeared in the picker",
-    });
-    const count = (await popover.$$('[role="option"]')).length;
-    ok(count > 20, `expected a real system font list, got ${count} entries`);
-    console.log(`[verify] picker lists ${count} installed font families`);
-    if (process.env.VERIFY_SHOT_DIR) {
-      await browser.saveScreenshot(`${process.env.VERIFY_SHOT_DIR}/font-picker-open.png`);
+    for (const label of ["UI font", "Editor font", "Monospace font"]) {
+      const input = await typography.$(`input[aria-label="${label} stack"]`);
+      const trigger = await typography.$(`button[aria-label="Show Fonts for ${label}"]`);
+      await input.waitForExist({ timeout: 5_000 });
+      await trigger.waitForEnabled({ timeout: 5_000 });
     }
   });
 
-  it("filters, and picking a font rewrites the stack and the CSS variable", async function () {
-    const search = await $('input[aria-label="Search installed fonts"]');
-    await search.addValue("Menlo");
+  it("routes a scoped native selection and preserves the edited fallback tail", async function () {
+    const input = await $('input[aria-label="Monospace font stack"]');
+    const trigger = await $('button[aria-label="Show Fonts for Monospace font"]');
+    await input.scrollIntoView({ block: "center" });
+    await input.setValue('Custom Primary, Georgia, "Times New Roman", serif');
+    await trigger.click();
 
-    const menlo = await $('[role="option"]*=Menlo');
-    await menlo.waitForExist({ timeout: 5_000 });
-    await menlo.click();
-
-    // Popover closes on pick.
-    const popover = await $('[role="dialog"][aria-label="Installed fonts"]');
-    await browser.waitUntil(async () => !(await popover.isExisting()), { timeout: 5_000 });
-
-    // The row's stack input now leads with the picked family, default tail kept.
-    const stackInput = await $(
-      `//section[.//h2[contains(., "Fonts")]]` +
-        `//div[div/div[text()="Monospace font"]]//input[@aria-label="Font stack"]`,
+    await browser.waitUntil(
+      async () => Boolean(await trigger.getAttribute("data-native-font-request-id")),
+      { timeout: 5_000, timeoutMsg: "native font request token was not published" },
     );
-    const stack = await stackInput.getValue();
-    ok(stack.startsWith("Menlo,"), `stack should lead with Menlo: ${stack}`);
-    ok(stack.includes("monospace"), `stack should keep the generic tail: ${stack}`);
+    const requestId = await trigger.getAttribute("data-native-font-request-id");
+    ok(requestId, "expected an active native font request token");
 
-    // The global --mono-font CSS var picked it up (theme.ts applyCssVarBindings).
+    // The old searchable DOM imitation must not return when the native trigger opens.
+    strictEqual(await $('[role="dialog"][aria-label="Installed fonts"]').isExisting(), false);
+    strictEqual(await $('input[aria-label="Search installed fonts"]').isExisting(), false);
+
+    await browser.executeAsync((token, done) => {
+      window.__TAURI_INTERNALS__
+        .invoke("plugin:event|emit", {
+          event: "font:selected",
+          payload: { requestId: token, family: "Menlo" },
+        })
+        .then(() => done(null))
+        .catch((error) => done(error && error.message ? error.message : String(error)));
+    }, requestId);
+
+    await browser.waitUntil(async () => (await input.getValue()).startsWith("Menlo,"), {
+      timeout: 5_000,
+      timeoutMsg: "native selection event did not update the font stack",
+    });
+    strictEqual(await input.getValue(), 'Menlo, Georgia, "Times New Roman", serif');
+
     const cssVar = await browser.execute(() =>
       getComputedStyle(document.documentElement).getPropertyValue("--mono-font"),
     );
     ok(cssVar.includes("Menlo"), `--mono-font should contain Menlo: ${cssVar}`);
 
-    // And it persisted through the settings backend.
-    const persisted = await browser.executeAsync((key, done) => {
-      window.__TAURI_INTERNALS__
-        .invoke("get_setting", { key })
-        .then((v) => done(JSON.stringify(v)))
-        .catch((e) => done(`ERROR: ${e && e.message ? e.message : String(e)}`));
-    }, "fonts.mono");
-    ok(String(persisted).includes("Menlo"), `persisted setting should contain Menlo: ${persisted}`);
-    console.log(`[verify] stack="${stack}" cssVar="${cssVar.trim()}" persisted=${persisted}`);
-    if (process.env.VERIFY_SHOT_DIR) {
-      await browser.saveScreenshot(`${process.env.VERIFY_SHOT_DIR}/font-picked.png`);
-    }
-  });
-
-  it("probe: gibberish search shows an empty state, Escape closes the popover", async function () {
-    const anyPicker = await $('button[aria-label="Choose installed font"]');
-    await anyPicker.scrollIntoView({ block: "center" });
-    await anyPicker.click();
-
-    const search = await $('input[aria-label="Search installed fonts"]');
-    await search.waitForExist({ timeout: 5_000 });
-    await search.addValue("zzzznotafont");
-    const empty = await $("div=No matching fonts.");
-    await empty.waitForExist({ timeout: 5_000 });
-
-    await browser.execute(() => {
-      document.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-      );
-    });
-    const popover = await $('[role="dialog"][aria-label="Installed fonts"]');
-    await browser.waitUntil(async () => !(await popover.isExisting()), {
-      timeout: 5_000,
-      timeoutMsg: "popover did not close on Escape",
-    });
-  });
-
-  it("probe: free-text stack editing still works and reaches the CSS variable", async function () {
-    const stackInput = await $(
-      `//section[.//h2[contains(., "Fonts")]]` +
-        `//div[div/div[text()="Monospace font"]]//input[@aria-label="Font stack"]`,
+    let persisted;
+    await browser.waitUntil(
+      async () => {
+        persisted = await browser.executeAsync((key, done) => {
+          window.__TAURI_INTERNALS__
+            .invoke("get_setting", { key })
+            .then((value) => done(JSON.stringify(value)))
+            .catch((error) =>
+              done(`ERROR: ${error && error.message ? error.message : String(error)}`),
+            );
+        }, "fonts.mono");
+        return persisted === '"Menlo, Georgia, \\"Times New Roman\\", serif"';
+      },
+      { timeout: 5_000, timeoutMsg: `font setting did not persist: ${persisted}` },
     );
-    await stackInput.scrollIntoView({ block: "center" });
-    await stackInput.setValue("Courier, monospace");
+
+    await browser.executeAsync((token, done) => {
+      window.__TAURI_INTERNALS__
+        .invoke("close_native_font_panel", { requestId: token })
+        .then(() => done(null))
+        .catch((error) => done(error && error.message ? error.message : String(error)));
+    }, requestId);
+  });
+
+  it("keeps direct font-stack editing available", async function () {
+    const input = await $('input[aria-label="Monospace font stack"]');
+    await input.scrollIntoView({ block: "center" });
+    await input.setValue("Courier, monospace");
 
     await browser.waitUntil(
       async () => {
-        const v = await browser.execute(() =>
+        const value = await browser.execute(() =>
           getComputedStyle(document.documentElement).getPropertyValue("--mono-font"),
         );
-        return v.includes("Courier");
+        return value.includes("Courier");
       },
       { timeout: 5_000, timeoutMsg: "--mono-font never reflected the typed stack" },
     );
-    strictEqual(await stackInput.getValue(), "Courier, monospace");
+    strictEqual(await input.getValue(), "Courier, monospace");
   });
 });
