@@ -10,6 +10,16 @@ export function useSetting<K extends SettingKey>(key: K): SettingsMap[K] | undef
   return useSettingsStore((state) => state.settings[key as string]) as SettingsMap[K] | undefined;
 }
 
+/** Subscribe to a boolean setting. TypeScript widens JSON imports, so the
+ *  schema-derived `SettingsMap` can't give boolean settings a boolean type —
+ *  narrow at runtime instead and fall back for missing or mistyped values
+ *  (settings hydrate from the backend before first render, so the fallback
+ *  only covers transient gaps). */
+export function useBooleanSetting(key: SettingKey, fallback = true): boolean {
+  const value = useSettingsStore((state) => state.settings[key as string]);
+  return typeof value === "boolean" ? value : fallback;
+}
+
 /** Stable function reference for writing a setting. Function identity in the
  *  store doesn't change, so this hook never causes re-renders. */
 export function useSetSetting() {

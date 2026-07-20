@@ -1,7 +1,7 @@
 import { useCallback, useState, type MouseEvent } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useWorkspace } from "@/hooks/use-workspace";
-import { useSetting } from "@/hooks/use-settings";
+import { useBooleanSetting, useSetting } from "@/hooks/use-settings";
 import {
   usePinnedFiles,
   useRefreshDirectory,
@@ -54,6 +54,7 @@ export function SidebarNavigator({
   const openFile = openFileOverride ?? defaultOpenFile;
   const refreshDirectory = useRefreshDirectory();
   const fileLabelMode = useSetting("appearance.sidebar-file-label");
+  const showRecents = useBooleanSetting("appearance.sidebar-show-recents");
   const pinnedPaths = usePinnedFiles();
   const togglePinnedFile = useTogglePinnedFile();
   const removePinnedFile = useRemovePinnedFile();
@@ -220,7 +221,7 @@ export function SidebarNavigator({
         </SidebarSection>
       )}
 
-      {recentFiles.files.length > 0 && (
+      {showRecents && recentFiles.files.length > 0 && (
         <SidebarSection title="Recents">
           <div role="tree" aria-label="Recents" className="flex flex-col gap-px">
             {recentFiles.files.map((entry) => (

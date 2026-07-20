@@ -29,6 +29,30 @@
       "default": 2
     },
     {
+      "key": "statusbar.show-words",
+      "label": "Words",
+      "description": "Show the word count in the status bar",
+      "category": "Status Bar",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "key": "statusbar.show-characters",
+      "label": "Characters",
+      "description": "Show the character count in the status bar",
+      "category": "Status Bar",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "key": "statusbar.show-paragraphs",
+      "label": "Paragraphs",
+      "description": "Show the paragraph count in the status bar",
+      "category": "Status Bar",
+      "type": "boolean",
+      "default": true
+    },
+    {
       "key": "appearance.theme",
       "label": "Schema",
       "description": "Light or dark color schema",
@@ -61,6 +85,22 @@
       "type": "enum",
       "options": ["title", "filename"],
       "default": "title"
+    },
+    {
+      "key": "appearance.sidebar-show-search",
+      "label": "Sidebar Search Button",
+      "description": "Show the Search button at the top of the sidebar",
+      "category": "Appearance",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "key": "appearance.sidebar-show-recents",
+      "label": "Sidebar Recents",
+      "description": "Show the Recents section in the sidebar",
+      "category": "Appearance",
+      "type": "boolean",
+      "default": true
     },
     {
       "key": "appearance.editor-width",
