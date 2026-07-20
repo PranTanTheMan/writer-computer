@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-20
+
+- Hide status bar metrics and sidebar sections. Right-click the bottom status bar to toggle the word, character, and paragraph counts individually (the bar disappears when all three are off); right-click the sidebar background or a section title to toggle the Search button and the Recents section. All five toggles also live in Preferences — the metric toggles under a new "Status Bar" section, the sidebar ones under Appearance — and every menu lists hidden items as unchecked entries so they can be re-shown from the same place.
+
 ## 2026-07-18
 
 - Simplify the Typography font controls to ordinary installed-font selects matching the rest of Settings. Remove the separate AppKit Font panel and editable stack field; choosing a family still preserves the setting's existing CSS fallback tail. UI and editor now default to SF Pro, while the renamed Code font setting defaults to SF Mono.
