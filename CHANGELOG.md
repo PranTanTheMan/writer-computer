@@ -8,6 +8,7 @@
 
 - Typography is now configured once for all themes: the UI, editor, and monospace settings moved out of the per-mode Light/Dark theme cards into a single "Typography" section, so a font choice applies in both color modes. Existing per-mode customizations migrate automatically (the light value wins if the modes differed). On macOS, the chevron now opens the real system Font panel instead of a custom searchable combobox; a native pick replaces only the primary family and preserves an edited fallback stack. The stack remains directly editable, and rapid changes persist in order.
 - Hide the margin heading `#` markers unless the caret is on the heading line. Restoring the hanging-hash rendering (2026-07-11) made every heading show its muted hash markers all the time; they now fade in only while editing the heading. The hide uses `opacity` rather than the `font-size: 0` collapse, so the ArrowUp caret-motion fix that surfaced them is preserved.
+- Render LaTeX math with KaTeX. Inline `$...$` and display `$$...$$` formulas show as typeset math when the caret is elsewhere and unfold to editable source when the selection touches them (clicking a rendered formula jumps straight to its source). Display math renders as a centered block; formulas that fail to parse show the raw source with the error message on hover. Inline `$` now follows Pandoc's rules — content can't start/end with whitespace and a closing `$` can't sit before a digit — so currency prose like "I paid $5 and $10" stays plain text. A literal dollar is still `\$`.
 
 ## 2026-07-11
 

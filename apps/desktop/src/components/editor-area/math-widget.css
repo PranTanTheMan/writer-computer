@@ -1,0 +1,22 @@
+/* Rendered LaTeX math widgets (see math-decorations.ts). KaTeX's own
+   stylesheet handles the formula internals; these rules only shape the
+   widget frame. */
+
+.cm-math-widget {
+  cursor: pointer;
+}
+
+/* KaTeX display-mode output is a block box; tighten its default 1em margins
+   so display math sits closer to the surrounding prose rhythm. */
+.cm-math-widget .katex-display {
+  margin: 0.5em 0;
+}
+
+/* Render failures show the raw source, error message in the tooltip. */
+.cm-math-error {
+  font-family: var(--pm-code-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--pm-syntax-invalid, oklch(64.62% 0.203 29.2));
+  background-color: var(--pm-code-background-color);
+  border-radius: 0.4rem;
+  padding: 0.1rem 0.3rem;
+}

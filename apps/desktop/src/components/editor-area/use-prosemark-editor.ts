@@ -50,6 +50,7 @@ import {
 import { tableDecorations } from "./table-decorations";
 import { htmlBlockDecorations, htmlBlockParserExtension } from "./html-block-decorations";
 import { mermaidDecorations } from "./mermaid-decorations";
+import { mathDecorations } from "./math-decorations";
 import { dragFreezeExtensions } from "./drag-selection-gate";
 import { clampSelectionToHeadings, headingDecorations } from "./heading-decorations";
 import { imageSrcResolver } from "./image-src-resolver";
@@ -646,6 +647,7 @@ function createEditorExtensions(
     tableDecorations(),
     htmlBlockDecorations(),
     mermaidDecorations(),
+    mathDecorations(),
     headingDecorations,
     imageSrcResolver(getFilePath),
     wikiLinkExtension(getFilePath, isDisposed),
