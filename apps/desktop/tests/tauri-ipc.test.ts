@@ -76,6 +76,20 @@ describe("filesystem IPC wrappers", () => {
     });
   });
 
+  test("createSidebarEntry calls the workspace-scoped command", async () => {
+    mockedInvoke.mockResolvedValue({
+      name: "Untitled.md",
+      path: "/ws/Untitled.md",
+      is_dir: false,
+      is_markdown: true,
+    });
+    await ipc.createSidebarEntry("/ws", "file");
+    expect(mockedInvoke).toHaveBeenCalledWith("create_sidebar_entry", {
+      parentPath: "/ws",
+      kind: "file",
+    });
+  });
+
   test("renameEntry calls correct command", async () => {
     mockedInvoke.mockResolvedValue(undefined);
     await ipc.renameEntry("/old.md", "/new.md");
@@ -110,6 +124,18 @@ describe("workspace IPC wrappers", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("open_workspace", {
       path: "/ws",
     });
+  });
+
+  test("opens the current window workspace in its file manager", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+    await ipc.openWorkspaceInFileManager();
+    expect(mockedInvoke).toHaveBeenCalledWith("open_workspace_in_file_manager");
+  });
+
+  test("opens the current window workspace in a terminal", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+    await ipc.openWorkspaceInTerminal();
+    expect(mockedInvoke).toHaveBeenCalledWith("open_workspace_in_terminal");
   });
 
   test("pickWorkspace opens a directory dialog", async () => {

@@ -7,16 +7,167 @@ use crate::watcher::drop_watcher_off_thread;
 use crate::PendingOpenPayload;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspaceInfo {
     pub root: String,
     pub name: String,
     pub file_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LaunchPlatform {
+    MacOs,
+    Windows,
+    Linux,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TerminalLaunchSpec {
+    program: String,
+    args: Vec<String>,
+    current_dir: PathBuf,
+    new_console: bool,
+}
+
+fn terminal_launch_specs(
+    platform: LaunchPlatform,
+    root: &Path,
+    terminal_env: Option<&str>,
+) -> Vec<TerminalLaunchSpec> {
+    let spec = |program: &str, args: Vec<String>, new_console: bool| TerminalLaunchSpec {
+        program: program.to_string(),
+        args,
+        current_dir: root.to_path_buf(),
+        new_console,
+    };
+
+    match platform {
+        LaunchPlatform::MacOs => vec![spec(
+            "open",
+            vec![
+                "-a".into(),
+                "Terminal".into(),
+                root.to_string_lossy().into_owned(),
+            ],
+            false,
+        )],
+        LaunchPlatform::Windows => vec![spec("cmd.exe", vec!["/K".into()], true)],
+        LaunchPlatform::Linux => {
+            let mut programs = Vec::new();
+            if let Some(program) = terminal_env
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                programs.push(program.to_string());
+            }
+            for fallback in [
+                "x-terminal-emulator",
+                "ghostty",
+                "gnome-terminal",
+                "konsole",
+                "xfce4-terminal",
+            ] {
+                if !programs.iter().any(|program| program == fallback) {
+                    programs.push(fallback.to_string());
+                }
+            }
+            programs
+                .into_iter()
+                .map(|program| spec(&program, Vec::new(), false))
+                .collect()
+        }
+    }
+}
+
+fn current_launch_platform() -> LaunchPlatform {
+    match std::env::consts::OS {
+        "macos" => LaunchPlatform::MacOs,
+        "windows" => LaunchPlatform::Windows,
+        _ => LaunchPlatform::Linux,
+    }
+}
+
+fn validate_workspace_launch_root(path: &Path) -> Result<PathBuf, AppError> {
+    if !path.is_dir() {
+        return Err(AppError::NotFound(path.to_string_lossy().to_string()));
+    }
+    path.canonicalize()
+        .map_err(|error| AppError::Io(error.to_string()))
+}
+
+fn workspace_root_for_window(app: &tauri::AppHandle, label: &str) -> Result<PathBuf, AppError> {
+    app.state::<AppState>()
+        .get_or_create(label)
+        .workspace_root
+        .read()
+        .clone()
+        .ok_or(AppError::NoWorkspace)
+}
+
+fn launch_terminal(root: &Path) -> Result<(), AppError> {
+    let terminal_env = std::env::var("TERMINAL").ok();
+    let specs = terminal_launch_specs(current_launch_platform(), root, terminal_env.as_deref());
+    let mut last_error = None;
+
+    for launch in specs {
+        let mut command = Command::new(&launch.program);
+        command.args(&launch.args).current_dir(&launch.current_dir);
+
+        #[cfg(target_os = "windows")]
+        if launch.new_console {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+            command.creation_flags(CREATE_NEW_CONSOLE);
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = launch.new_console;
+
+        match command.spawn() {
+            Ok(_) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    Err(AppError::Io(
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "No terminal launcher is available".into()),
+    ))
+}
+
+#[tauri::command]
+pub async fn open_workspace_in_file_manager(
+    webview: tauri::Webview,
+    app: tauri::AppHandle,
+) -> Result<(), AppError> {
+    let root = workspace_root_for_window(&app, webview.label())?;
+    let root = tauri::async_runtime::spawn_blocking(move || validate_workspace_launch_root(&root))
+        .await
+        .map_err(|error| AppError::Io(error.to_string()))??;
+    app.opener()
+        .open_path(root.to_string_lossy().into_owned(), None::<String>)
+        .map_err(|error| AppError::Io(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn open_workspace_in_terminal(
+    webview: tauri::Webview,
+    app: tauri::AppHandle,
+) -> Result<(), AppError> {
+    let root = workspace_root_for_window(&app, webview.label())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = validate_workspace_launch_root(&root)?;
+        launch_terminal(&root)
+    })
+    .await
+    .map_err(|error| AppError::Io(error.to_string()))?
 }
 
 /// Synchronous workspace setup shared by `open_workspace` and the bundled
@@ -586,6 +737,45 @@ mod tests {
         let canonical = canonicalize_workspace_root(&raw).unwrap();
         assert!(canonical.is_absolute());
         assert_eq!(canonical, std::fs::canonicalize(&raw).unwrap());
+    }
+
+    #[test]
+    fn terminal_launch_specs_are_shell_free_on_all_platforms() {
+        let root = Path::new("/workspace with spaces");
+
+        let mac = terminal_launch_specs(LaunchPlatform::MacOs, root, None);
+        assert_eq!(mac.len(), 1);
+        assert_eq!(mac[0].program, "open");
+        assert_eq!(mac[0].args, ["-a", "Terminal", "/workspace with spaces"]);
+
+        let windows = terminal_launch_specs(LaunchPlatform::Windows, root, None);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].program, "cmd.exe");
+        assert_eq!(windows[0].args, ["/K"]);
+        assert!(windows[0].new_console);
+
+        let linux = terminal_launch_specs(LaunchPlatform::Linux, root, Some("ghostty"));
+        assert_eq!(linux[0].program, "ghostty");
+        assert!(linux
+            .iter()
+            .any(|spec| spec.program == "x-terminal-emulator"));
+        assert!(linux.iter().all(|spec| spec.args.is_empty()));
+    }
+
+    #[test]
+    fn launch_root_validation_rejects_files_and_missing_paths() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "# Note").unwrap();
+
+        assert!(matches!(
+            validate_workspace_launch_root(&file).unwrap_err(),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            validate_workspace_launch_root(&dir.path().join("missing")).unwrap_err(),
+            AppError::NotFound(_)
+        ));
     }
 
     #[cfg(target_os = "macos")]

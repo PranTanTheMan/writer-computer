@@ -87,6 +87,7 @@ export const FileTreeNode = memo(function FileTreeNode({
     const initialValue = entry.is_dir ? entry.name : getFileStem(entry.name);
     return (
       <div
+        onContextMenu={(event) => event.stopPropagation()}
         className={`flex h-[32px] w-full items-center gap-1.5 overflow-hidden rounded-lg pr-2 text-[13px] leading-[1.15] ${
           isActive ? "bg-[var(--surface-subtle)]" : ""
         }`}

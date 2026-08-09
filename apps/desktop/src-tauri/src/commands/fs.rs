@@ -1,8 +1,9 @@
 use crate::error::AppError;
 use crate::ignore::WorkspaceIgnore;
 use crate::state::{AppState, WorkspaceState};
-use serde::Serialize;
-use std::fs;
+use serde::{Deserialize, Serialize};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -117,40 +118,88 @@ pub(crate) fn modified_time(path: &std::path::Path) -> u64 {
 }
 
 /// Recursively checks if a directory contains at least one visible .md file.
-/// Used as fallback before the index is ready. Skips paths matched by the
-/// workspace ignore matcher so ignored directories don't resurrect their
-/// parent in the sidebar.
-fn dir_contains_markdown_recursive(path: &Path, ignore: Option<&WorkspaceIgnore>) -> bool {
-    let Ok(entries) = fs::read_dir(path) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let ft = entry.file_type();
-        let Ok(ft) = ft else { continue };
-        let entry_path = entry.path();
-
-        if let Some(ignore) = ignore {
-            if ignore.is_ignored(&entry_path, ft.is_dir()) {
-                continue;
-            }
-        }
-
-        if ft.is_file() {
-            if entry_path.extension().and_then(|e| e.to_str()) == Some("md") {
-                return true;
-            }
-        } else if ft.is_dir() && dir_contains_markdown_recursive(&entry_path, ignore) {
-            return true;
-        }
-    }
-    false
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DirectoryContent {
+    Markdown,
+    Empty,
+    Other,
 }
 
-/// O(1) check via the pre-built set, with recursive fallback during initial indexing.
-fn dir_contains_markdown(path: &Path, state: Option<&WorkspaceState>) -> bool {
+fn visible_fs_entry(
+    entry: Result<std::fs::DirEntry, std::io::Error>,
+    ignore: Option<&WorkspaceIgnore>,
+) -> Result<Option<(PathBuf, std::fs::FileType)>, AppError> {
+    let entry = entry?;
+    let file_type = entry.file_type()?;
+    let path = entry.path();
+    if entry.file_name().to_string_lossy().starts_with('.')
+        || ignore.is_some_and(|matcher| matcher.is_ignored(&path, file_type.is_dir()))
+    {
+        return Ok(None);
+    }
+    Ok(Some((path, file_type)))
+}
+
+/// Classify a directory tree through the same visible/ignored lens as the
+/// sidebar. Folder-only trees count as empty so a newly created folder stays
+/// available for authoring; a visible non-Markdown file makes the tree
+/// `Other`. A Markdown file wins immediately.
+fn classify_directory_content(
+    path: &Path,
+    ignore: Option<&WorkspaceIgnore>,
+) -> Result<DirectoryContent, AppError> {
+    let mut content = DirectoryContent::Empty;
+    for entry in fs::read_dir(path)? {
+        let Some((entry_path, file_type)) = visible_fs_entry(entry, ignore)? else {
+            continue;
+        };
+        if file_type.is_file() {
+            if entry_path.extension().and_then(|e| e.to_str()) == Some("md") {
+                return Ok(DirectoryContent::Markdown);
+            }
+            content = DirectoryContent::Other;
+        } else if file_type.is_dir() {
+            match classify_directory_content(&entry_path, ignore)? {
+                DirectoryContent::Markdown => return Ok(DirectoryContent::Markdown),
+                DirectoryContent::Other => content = DirectoryContent::Other,
+                DirectoryContent::Empty => {}
+            }
+        }
+    }
+    Ok(content)
+}
+
+/// Fast indexed-path check for a folder-only tree. Once the Markdown index is
+/// ready we already know this subtree has no Markdown, so the first visible
+/// file proves it is not empty and lets us stop without walking the remainder.
+fn directory_tree_is_empty(
+    path: &Path,
+    ignore: Option<&WorkspaceIgnore>,
+) -> Result<bool, AppError> {
+    for entry in fs::read_dir(path)? {
+        let Some((entry_path, file_type)) = visible_fs_entry(entry, ignore)? else {
+            continue;
+        };
+        if file_type.is_file()
+            || (file_type.is_dir() && !directory_tree_is_empty(&entry_path, ignore)?)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// O(1) Markdown check via the pre-built set once available. Directories not
+/// in that set still need a recursive classification to distinguish durable
+/// empty folder trees from trees containing only non-Markdown files.
+fn directory_is_sidebar_visible(
+    path: &Path,
+    state: Option<&WorkspaceState>,
+) -> Result<bool, AppError> {
     if let Some(state) = state {
-        if state.index_ready.load(Ordering::Relaxed) {
-            return state.dirs_with_markdown.read().contains(path);
+        let index_ready = state.index_ready.load(Ordering::Relaxed);
+        if index_ready && state.dirs_with_markdown.read().contains(path) {
+            return Ok(true);
         }
         // Snapshot the `Arc<WorkspaceIgnore>` under a brief read lock and
         // release immediately — the recursive fallback below does file I/O
@@ -158,9 +207,18 @@ fn dir_contains_markdown(path: &Path, state: Option<&WorkspaceState>) -> bool {
         // concurrent workspace switch's `workspace_ignore.write()`).
         let ignore_arc: Option<Arc<WorkspaceIgnore>> =
             state.workspace_ignore.read().as_ref().map(Arc::clone);
-        return dir_contains_markdown_recursive(path, ignore_arc.as_deref());
+        if index_ready {
+            return directory_tree_is_empty(path, ignore_arc.as_deref());
+        }
+        return Ok(matches!(
+            classify_directory_content(path, ignore_arc.as_deref())?,
+            DirectoryContent::Markdown | DirectoryContent::Empty
+        ));
     }
-    dir_contains_markdown_recursive(path, None)
+    Ok(matches!(
+        classify_directory_content(path, None)?,
+        DirectoryContent::Markdown | DirectoryContent::Empty
+    ))
 }
 
 pub fn read_directory_impl(
@@ -204,7 +262,7 @@ pub fn read_directory_impl(
         }
 
         if file_type.is_dir() {
-            if dir_contains_markdown(&entry_path, state) {
+            if directory_is_sidebar_visible(&entry_path, state)? {
                 dirs.push(DirEntry {
                     name,
                     path: entry_path.to_string_lossy().to_string(),
@@ -383,14 +441,25 @@ pub async fn read_file_entries(
 
 pub fn create_file_impl(path: &str) -> Result<FileContent, AppError> {
     let file_path = PathBuf::from(path);
-    if file_path.exists() {
-        return Err(AppError::AlreadyExists(path.to_string()));
-    }
     if let Some(parent) = file_path.parent() {
         fs::create_dir_all(parent)?;
     }
     let default_content = "# ";
-    fs::write(&file_path, default_content)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&file_path)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                AppError::AlreadyExists(path.to_string())
+            } else {
+                AppError::Io(error.to_string())
+            }
+        })?;
+    if let Err(error) = file.write_all(default_content.as_bytes()) {
+        let _ = fs::remove_file(&file_path);
+        return Err(AppError::Io(error.to_string()));
+    }
     Ok(FileContent {
         path: path.to_string(),
         content: default_content.to_string(),
@@ -405,10 +474,16 @@ pub async fn create_file(path: String) -> Result<FileContent, AppError> {
 
 pub fn create_directory_impl(path: &str) -> Result<DirEntry, AppError> {
     let dir_path = PathBuf::from(path);
-    if dir_path.exists() {
-        return Err(AppError::AlreadyExists(path.to_string()));
+    if let Some(parent) = dir_path.parent() {
+        fs::create_dir_all(parent)?;
     }
-    fs::create_dir_all(&dir_path)?;
+    fs::create_dir(&dir_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            AppError::AlreadyExists(path.to_string())
+        } else {
+            AppError::Io(error.to_string())
+        }
+    })?;
     let name = dir_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -426,6 +501,80 @@ pub fn create_directory_impl(path: &str) -> Result<DirEntry, AppError> {
 #[tauri::command]
 pub async fn create_directory(path: String) -> Result<DirEntry, AppError> {
     blocking(move || create_directory_impl(&path)).await
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SidebarEntryKind {
+    File,
+    Folder,
+}
+
+pub fn create_sidebar_entry_impl(
+    parent_path: &Path,
+    workspace_root: &Path,
+    kind: SidebarEntryKind,
+) -> Result<DirEntry, AppError> {
+    let root = workspace_root
+        .canonicalize()
+        .map_err(|error| AppError::Io(error.to_string()))?;
+    let parent = parent_path
+        .canonicalize()
+        .map_err(|_| AppError::NotFound(parent_path.to_string_lossy().to_string()))?;
+    if !parent.is_dir() || !parent.starts_with(&root) {
+        return Err(AppError::InvalidPath(
+            parent_path.to_string_lossy().to_string(),
+        ));
+    }
+
+    let mut suffix = 1_u64;
+    loop {
+        let numbered = |base: &str| {
+            if suffix == 1 {
+                base.to_string()
+            } else {
+                format!("{base} {suffix}")
+            }
+        };
+        let candidate = match kind {
+            SidebarEntryKind::File => parent.join(format!("{}.md", numbered("Untitled"))),
+            SidebarEntryKind::Folder => parent.join(numbered("Untitled Folder")),
+        };
+        let result = match kind {
+            SidebarEntryKind::File => {
+                create_file_impl(&candidate.to_string_lossy()).and_then(|_| {
+                    markdown_file_entry(&candidate)
+                        .ok_or_else(|| AppError::Io("Created Markdown file is unreadable".into()))
+                })
+            }
+            SidebarEntryKind::Folder => create_directory_impl(&candidate.to_string_lossy()),
+        };
+        match result {
+            Ok(entry) => return Ok(entry),
+            Err(AppError::AlreadyExists(_)) => {
+                suffix = suffix
+                    .checked_add(1)
+                    .ok_or_else(|| AppError::Io("Untitled name counter overflowed".into()))?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn create_sidebar_entry(
+    parent_path: String,
+    kind: SidebarEntryKind,
+    webview: tauri::Webview,
+    app: tauri::AppHandle,
+) -> Result<DirEntry, AppError> {
+    let state = app.state::<AppState>().get_or_create(webview.label());
+    let root = state
+        .workspace_root
+        .read()
+        .clone()
+        .ok_or(AppError::NoWorkspace)?;
+    blocking(move || create_sidebar_entry_impl(Path::new(&parent_path), &root, kind)).await
 }
 
 pub fn rename_entry_impl(old_path: &str, new_path: &str) -> Result<(), AppError> {
@@ -552,13 +701,19 @@ mod tests {
     }
 
     #[test]
-    fn test_read_directory_filters_markdown_only() {
+    fn test_read_directory_includes_empty_folder_trees_but_filters_non_markdown_content() {
         let dir = setup_test_dir();
+        fs::create_dir_all(dir.path().join("drafts").join("nested")).unwrap();
+        fs::write(dir.path().join("drafts").join(".DS_Store"), "hidden").unwrap();
         let result = read_directory_impl(&dir.path().to_string_lossy(), None).unwrap();
 
-        // Should have: notes/ dir, hello.md, world.md (3 total)
-        // NOT: readme.txt, empty/ dir
-        assert_eq!(result.len(), 3);
+        // `drafts/` is an empty folder tree and stays available for authoring.
+        // `empty/` contains only a visible non-Markdown file and remains hidden.
+        assert_eq!(result.len(), 4);
+        assert!(result
+            .iter()
+            .any(|entry| entry.name == "drafts" && entry.is_dir));
+        assert!(!result.iter().any(|entry| entry.name == "empty"));
         for entry in &result {
             assert!(entry.is_dir || entry.is_markdown);
         }
@@ -567,6 +722,7 @@ mod tests {
     #[test]
     fn test_read_directory_uses_index_when_ready() {
         let dir = setup_test_dir();
+        fs::create_dir_all(dir.path().join("drafts").join("nested")).unwrap();
         let state = WorkspaceState::default();
 
         // Build index
@@ -578,9 +734,23 @@ mod tests {
 
         let result = read_directory_impl(&dir.path().to_string_lossy(), Some(&state)).unwrap();
 
-        assert_eq!(result.len(), 3);
+        assert_eq!(result.len(), 4);
+        assert!(result
+            .iter()
+            .any(|entry| entry.name == "drafts" && entry.is_dir));
+        assert!(!result.iter().any(|entry| entry.name == "empty"));
         assert!(result[0].is_dir);
-        assert_eq!(result[0].name, "notes");
+    }
+
+    #[test]
+    fn test_directory_visibility_surfaces_read_errors() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("missing");
+
+        assert!(matches!(
+            directory_is_sidebar_visible(&missing, None).unwrap_err(),
+            AppError::Io(_)
+        ));
     }
 
     fn indexed_file(root: &Path, name: &str, modified_at: u64) -> crate::state::IndexedFile {
@@ -707,11 +877,76 @@ mod tests {
     fn test_create_file_already_exists() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("exists.md");
-        fs::write(&path, "").unwrap();
+        fs::write(&path, "do not overwrite").unwrap();
 
         let result = create_file_impl(&path.to_string_lossy());
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), AppError::AlreadyExists(_)));
+        assert_eq!(fs::read_to_string(path).unwrap(), "do not overwrite");
+    }
+
+    #[test]
+    fn test_create_directory_already_exists() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("exists");
+        fs::create_dir(&path).unwrap();
+
+        let result = create_directory_impl(&path.to_string_lossy());
+        assert!(matches!(result.unwrap_err(), AppError::AlreadyExists(_)));
+    }
+
+    #[test]
+    fn test_create_sidebar_entry_retries_collisions_without_overwriting() {
+        let dir = TempDir::new().unwrap();
+        let existing = dir.path().join("Untitled.md");
+        fs::write(&existing, "existing content").unwrap();
+
+        let created =
+            create_sidebar_entry_impl(dir.path(), dir.path(), SidebarEntryKind::File).unwrap();
+
+        assert_eq!(created.name, "Untitled 2.md");
+        assert_eq!(fs::read_to_string(existing).unwrap(), "existing content");
+        assert_eq!(fs::read_to_string(created.path).unwrap(), "# ");
+    }
+
+    #[test]
+    fn test_create_sidebar_entry_has_no_999_name_ceiling() {
+        let dir = TempDir::new().unwrap();
+        for suffix in 1..1000 {
+            let name = if suffix == 1 {
+                "Untitled.md".to_string()
+            } else {
+                format!("Untitled {suffix}.md")
+            };
+            fs::write(dir.path().join(name), "occupied").unwrap();
+        }
+
+        let created =
+            create_sidebar_entry_impl(dir.path(), dir.path(), SidebarEntryKind::File).unwrap();
+
+        assert_eq!(created.name, "Untitled 1000.md");
+    }
+
+    #[test]
+    fn test_create_sidebar_folder_retries_collisions() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("Untitled Folder")).unwrap();
+
+        let created =
+            create_sidebar_entry_impl(dir.path(), dir.path(), SidebarEntryKind::Folder).unwrap();
+
+        assert_eq!(created.name, "Untitled Folder 2");
+    }
+
+    #[test]
+    fn test_create_sidebar_entry_rejects_parent_outside_workspace() {
+        let workspace = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+
+        let result =
+            create_sidebar_entry_impl(outside.path(), workspace.path(), SidebarEntryKind::Folder);
+
+        assert!(result.is_err());
     }
 
     #[test]

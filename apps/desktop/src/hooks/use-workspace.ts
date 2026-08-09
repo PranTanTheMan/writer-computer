@@ -38,3 +38,7 @@ export function useIsStartupResolved() {
 export function useWorkspaceRoot() {
   return useWorkspaceStore((s) => s.root);
 }
+
+export function useWorkspaceGeneration() {
+  return useWorkspaceStore((s) => s.workspaceGeneration);
+}
