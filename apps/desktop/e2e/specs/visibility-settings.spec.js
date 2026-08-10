@@ -114,7 +114,7 @@ describe("status bar and sidebar visibility settings", function () {
     strictEqual(await $("[data-sidebar-search-button]").isExisting(), false);
   });
 
-  it("renders all five toggles in Preferences", async function () {
+  it("renders visibility toggles and the Default Terminal preference", async function () {
     await browser.execute(() => {
       document.dispatchEvent(
         new KeyboardEvent("keydown", { key: "p", metaKey: true, bubbles: true, cancelable: true }),
@@ -142,9 +142,15 @@ describe("status bar and sidebar visibility settings", function () {
       "Status Bar: Words",
       "Status Bar: Characters",
       "Status Bar: Paragraphs",
+      "Workspace: Default Terminal",
     ]) {
       ok(rows.includes(expected), `missing settings row "${expected}" in ${JSON.stringify(rows)}`);
     }
+    strictEqual(
+      await $('input[placeholder="Platform default"]').isExisting(),
+      true,
+      "missing Default Terminal input",
+    );
   });
 
   it("hides the Recents section when off", async function () {

@@ -34,7 +34,7 @@ interface PersistedSettingValue {
 }
 
 interface SettingWriteQueue {
-  tail: Promise<void>;
+  tail: Promise<unknown>;
   latestVersion: number;
   lastPersisted: PersistedSettingValue;
 }
@@ -76,6 +76,23 @@ function replaceSettingValue(
   return nextSettings;
 }
 
+function settingValueMatches(
+  settings: Record<string, unknown>,
+  key: string,
+  persisted: PersistedSettingValue,
+): boolean {
+  return (
+    Object.prototype.hasOwnProperty.call(settings, key) === persisted.exists &&
+    (!persisted.exists || settingValuesEqual(settings[key], persisted.value))
+  );
+}
+
+function settingValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  return left.every((value, index) => Object.is(value, right[index]));
+}
+
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: {},
   isLoaded: false,
@@ -94,10 +111,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const queue = getWriteQueue(key, get().settings);
     const version = ++queue.latestVersion;
 
-    set((state) => ({
-      settings: { ...state.settings, [key]: value },
-    }));
-    applySettingsSideEffects(get().settings);
+    let didOptimisticallyChange = false;
+    set((state) => {
+      if (
+        Object.prototype.hasOwnProperty.call(state.settings, key) &&
+        settingValuesEqual(state.settings[key], value)
+      ) {
+        return state;
+      }
+      didOptimisticallyChange = true;
+      return { settings: { ...state.settings, [key]: value } };
+    });
+    if (didOptimisticallyChange) applySettingsSideEffects(get().settings);
 
     const write = queue.tail
       .catch(() => {
@@ -108,14 +133,27 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     queue.tail = write;
 
     try {
-      await write;
-      queue.lastPersisted = { exists: true, value };
+      const persistedValue = await write;
+      queue.lastPersisted = { exists: true, value: persistedValue };
+      if (queue.latestVersion === version) {
+        let didReconcile = false;
+        set((state) => {
+          const persisted = { exists: true, value: persistedValue };
+          if (settingValueMatches(state.settings, key, persisted)) return state;
+          didReconcile = true;
+          return { settings: replaceSettingValue(state.settings, key, persisted) };
+        });
+        if (didReconcile) applySettingsSideEffects(get().settings);
+      }
     } catch (error) {
       if (queue.latestVersion === version) {
-        set((state) => ({
-          settings: replaceSettingValue(state.settings, key, queue.lastPersisted),
-        }));
-        applySettingsSideEffects(get().settings);
+        let didRollBack = false;
+        set((state) => {
+          if (settingValueMatches(state.settings, key, queue.lastPersisted)) return state;
+          didRollBack = true;
+          return { settings: replaceSettingValue(state.settings, key, queue.lastPersisted) };
+        });
+        if (didRollBack) applySettingsSideEffects(get().settings);
       }
       throw error;
     } finally {
@@ -142,17 +180,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       await write;
       queue.lastPersisted = resetValue;
       if (queue.latestVersion === version) {
-        set((state) => ({
-          settings: replaceSettingValue(state.settings, key, resetValue),
-        }));
-        applySettingsSideEffects(get().settings);
+        let didReset = false;
+        set((state) => {
+          if (settingValueMatches(state.settings, key, resetValue)) return state;
+          didReset = true;
+          return { settings: replaceSettingValue(state.settings, key, resetValue) };
+        });
+        if (didReset) applySettingsSideEffects(get().settings);
       }
     } catch (error) {
       if (queue.latestVersion === version) {
-        set((state) => ({
-          settings: replaceSettingValue(state.settings, key, queue.lastPersisted),
-        }));
-        applySettingsSideEffects(get().settings);
+        let didRollBack = false;
+        set((state) => {
+          if (settingValueMatches(state.settings, key, queue.lastPersisted)) return state;
+          didRollBack = true;
+          return { settings: replaceSettingValue(state.settings, key, queue.lastPersisted) };
+        });
+        if (didRollBack) applySettingsSideEffects(get().settings);
       }
       throw error;
     } finally {

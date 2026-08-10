@@ -57,7 +57,7 @@ export function FileBrowser() {
             onNewFile: () => createRootEntry("file"),
             onNewFolder: () => createRootEntry("folder"),
             onOpenInTerminal: () =>
-              runWorkspaceAction("Failed to open Terminal", tauri.openWorkspaceInTerminal),
+              runWorkspaceAction("Failed to open terminal", tauri.openWorkspaceInTerminal),
             onOpenInFileManager: () =>
               runWorkspaceAction(
                 "Failed to open workspace folder",

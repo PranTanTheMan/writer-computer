@@ -1,5 +1,6 @@
 use crate::commands::fs::{read_directory_impl, read_file_impl, DirEntry, FileContent};
 use crate::commands::search::index_workspace_impl;
+use crate::commands::settings::get_global_string_setting;
 use crate::error::AppError;
 use crate::ignore::WorkspaceIgnore;
 use crate::state::{AppState, WorkspaceState};
@@ -34,19 +35,57 @@ struct TerminalLaunchSpec {
     args: Vec<String>,
     current_dir: PathBuf,
     new_console: bool,
+    execution: TerminalExecution,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalExecution {
+    Detached,
+    WaitForSuccess,
+}
+
+const DEFAULT_TERMINAL_SETTING_KEY: &str = "workspace.default-terminal";
 
 fn terminal_launch_specs(
     platform: LaunchPlatform,
     root: &Path,
+    preferred_terminal: Option<&str>,
     terminal_env: Option<&str>,
 ) -> Vec<TerminalLaunchSpec> {
-    let spec = |program: &str, args: Vec<String>, new_console: bool| TerminalLaunchSpec {
+    let spec = |program: &str,
+                args: Vec<String>,
+                new_console: bool,
+                execution: TerminalExecution| TerminalLaunchSpec {
         program: program.to_string(),
         args,
         current_dir: root.to_path_buf(),
         new_console,
+        execution,
     };
+
+    if let Some(program) = preferred_terminal {
+        return match platform {
+            LaunchPlatform::MacOs => vec![spec(
+                "open",
+                vec![
+                    "-a".into(),
+                    program.into(),
+                    root.to_string_lossy().into_owned(),
+                ],
+                false,
+                TerminalExecution::WaitForSuccess,
+            )],
+            LaunchPlatform::Windows => {
+                vec![spec(program, Vec::new(), true, TerminalExecution::Detached)]
+            }
+            LaunchPlatform::Linux => vec![spec(
+                program,
+                Vec::new(),
+                false,
+                TerminalExecution::Detached,
+            )],
+        };
+    }
 
     match platform {
         LaunchPlatform::MacOs => vec![spec(
@@ -57,8 +96,14 @@ fn terminal_launch_specs(
                 root.to_string_lossy().into_owned(),
             ],
             false,
+            TerminalExecution::WaitForSuccess,
         )],
-        LaunchPlatform::Windows => vec![spec("cmd.exe", vec!["/K".into()], true)],
+        LaunchPlatform::Windows => vec![spec(
+            "cmd.exe",
+            vec!["/K".into()],
+            true,
+            TerminalExecution::Detached,
+        )],
         LaunchPlatform::Linux => {
             let mut programs = Vec::new();
             if let Some(program) = terminal_env
@@ -80,7 +125,7 @@ fn terminal_launch_specs(
             }
             programs
                 .into_iter()
-                .map(|program| spec(&program, Vec::new(), false))
+                .map(|program| spec(&program, Vec::new(), false, TerminalExecution::Detached))
                 .collect()
         }
     }
@@ -111,9 +156,25 @@ fn workspace_root_for_window(app: &tauri::AppHandle, label: &str) -> Result<Path
         .ok_or(AppError::NoWorkspace)
 }
 
-fn launch_terminal(root: &Path) -> Result<(), AppError> {
+fn terminal_launch_error(preferred_terminal: Option<&str>, reason: &str) -> AppError {
+    if let Some(preferred_terminal) = preferred_terminal {
+        AppError::Io(format!(
+            "Could not launch configured terminal {preferred_terminal:?}: {reason}. Clear or reset Default Terminal in Preferences."
+        ))
+    } else {
+        AppError::Io(reason.to_string())
+    }
+}
+
+fn launch_terminal(root: &Path, preferred_terminal: &str) -> Result<(), AppError> {
+    let preferred_terminal = (!preferred_terminal.is_empty()).then_some(preferred_terminal);
     let terminal_env = std::env::var("TERMINAL").ok();
-    let specs = terminal_launch_specs(current_launch_platform(), root, terminal_env.as_deref());
+    let specs = terminal_launch_specs(
+        current_launch_platform(),
+        root,
+        preferred_terminal,
+        terminal_env.as_deref(),
+    );
     let mut last_error = None;
 
     for launch in specs {
@@ -129,16 +190,32 @@ fn launch_terminal(root: &Path) -> Result<(), AppError> {
         #[cfg(not(target_os = "windows"))]
         let _ = launch.new_console;
 
-        match command.spawn() {
-            Ok(_) => return Ok(()),
-            Err(error) => last_error = Some(error),
+        match launch.execution {
+            TerminalExecution::Detached => match command.spawn() {
+                Ok(_) => return Ok(()),
+                Err(error) => last_error = Some(error.to_string()),
+            },
+            TerminalExecution::WaitForSuccess => match command.output() {
+                Ok(output) if output.status.success() => return Ok(()),
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let stderr = stderr.trim();
+                    last_error = Some(if stderr.is_empty() {
+                        format!("{} exited with {}", launch.program, output.status)
+                    } else {
+                        stderr.to_string()
+                    });
+                }
+                Err(error) => last_error = Some(error.to_string()),
+            },
         }
     }
 
-    Err(AppError::Io(
+    Err(terminal_launch_error(
+        preferred_terminal,
         last_error
-            .map(|error| error.to_string())
-            .unwrap_or_else(|| "No terminal launcher is available".into()),
+            .as_deref()
+            .unwrap_or("No terminal launcher is available"),
     ))
 }
 
@@ -162,9 +239,11 @@ pub async fn open_workspace_in_terminal(
     app: tauri::AppHandle,
 ) -> Result<(), AppError> {
     let root = workspace_root_for_window(&app, webview.label())?;
+    let preferred_terminal =
+        get_global_string_setting(&app, webview.label(), DEFAULT_TERMINAL_SETTING_KEY)?;
     tauri::async_runtime::spawn_blocking(move || {
         let root = validate_workspace_launch_root(&root)?;
-        launch_terminal(&root)
+        launch_terminal(&root, &preferred_terminal)
     })
     .await
     .map_err(|error| AppError::Io(error.to_string()))?
@@ -740,26 +819,112 @@ mod tests {
     }
 
     #[test]
-    fn terminal_launch_specs_are_shell_free_on_all_platforms() {
+    fn terminal_launch_specs_cover_defaults_and_explicit_preferences_exactly() {
         let root = Path::new("/workspace with spaces");
 
-        let mac = terminal_launch_specs(LaunchPlatform::MacOs, root, None);
+        let mac = terminal_launch_specs(LaunchPlatform::MacOs, root, None, None);
         assert_eq!(mac.len(), 1);
         assert_eq!(mac[0].program, "open");
         assert_eq!(mac[0].args, ["-a", "Terminal", "/workspace with spaces"]);
+        assert_eq!(mac[0].current_dir, root);
+        assert!(!mac[0].new_console);
+        assert_eq!(mac[0].execution, TerminalExecution::WaitForSuccess);
 
-        let windows = terminal_launch_specs(LaunchPlatform::Windows, root, None);
+        let custom_mac = terminal_launch_specs(LaunchPlatform::MacOs, root, Some("iTerm"), None);
+        assert_eq!(custom_mac.len(), 1);
+        assert_eq!(custom_mac[0].program, "open");
+        assert_eq!(
+            custom_mac[0].args,
+            ["-a", "iTerm", "/workspace with spaces"]
+        );
+        assert_eq!(custom_mac[0].execution, TerminalExecution::WaitForSuccess);
+
+        let windows = terminal_launch_specs(LaunchPlatform::Windows, root, None, None);
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].program, "cmd.exe");
         assert_eq!(windows[0].args, ["/K"]);
+        assert_eq!(windows[0].current_dir, root);
         assert!(windows[0].new_console);
+        assert_eq!(windows[0].execution, TerminalExecution::Detached);
 
-        let linux = terminal_launch_specs(LaunchPlatform::Linux, root, Some("ghostty"));
-        assert_eq!(linux[0].program, "ghostty");
+        let custom_windows = terminal_launch_specs(
+            LaunchPlatform::Windows,
+            root,
+            Some("C:\\Apps\\wt.exe"),
+            None,
+        );
+        assert_eq!(custom_windows.len(), 1);
+        assert_eq!(custom_windows[0].program, "C:\\Apps\\wt.exe");
+        assert!(custom_windows[0].args.is_empty());
+        assert_eq!(custom_windows[0].current_dir, root);
+        assert!(custom_windows[0].new_console);
+        assert_eq!(custom_windows[0].execution, TerminalExecution::Detached);
+
+        let linux = terminal_launch_specs(LaunchPlatform::Linux, root, None, Some(" ghostty "));
+        assert_eq!(
+            linux
+                .iter()
+                .map(|spec| spec.program.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "ghostty",
+                "x-terminal-emulator",
+                "gnome-terminal",
+                "konsole",
+                "xfce4-terminal"
+            ]
+        );
+        assert!(linux.iter().all(|spec| spec.args.is_empty()));
+        assert!(linux.iter().all(|spec| spec.current_dir == root));
+        assert!(linux.iter().all(|spec| !spec.new_console));
         assert!(linux
             .iter()
-            .any(|spec| spec.program == "x-terminal-emulator"));
-        assert!(linux.iter().all(|spec| spec.args.is_empty()));
+            .all(|spec| spec.execution == TerminalExecution::Detached));
+
+        let linux_without_env = terminal_launch_specs(LaunchPlatform::Linux, root, None, None);
+        assert_eq!(
+            linux_without_env
+                .iter()
+                .map(|spec| spec.program.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "x-terminal-emulator",
+                "ghostty",
+                "gnome-terminal",
+                "konsole",
+                "xfce4-terminal"
+            ]
+        );
+
+        let opaque = "ghostty --execute 'not a flag'";
+        let custom_linux =
+            terminal_launch_specs(LaunchPlatform::Linux, root, Some(opaque), Some("other"));
+        assert_eq!(custom_linux.len(), 1);
+        assert_eq!(custom_linux[0].program, opaque);
+        assert!(custom_linux[0].args.is_empty());
+    }
+
+    #[test]
+    fn custom_terminal_errors_identify_the_preference_and_recovery() {
+        let error =
+            terminal_launch_error(Some("Missing Terminal"), "application could not be found");
+        let message = error.to_string();
+        assert!(message.contains("Missing Terminal"));
+        assert!(message.contains("Default Terminal"));
+        assert!(message.contains("Preferences"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_invalid_terminal_app_surfaces_the_open_helper_failure() {
+        let dir = TempDir::new().unwrap();
+        let preference = "Writer Definitely Missing Terminal 8B112EE0";
+        let error = launch_terminal(dir.path(), preference).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains(preference));
+        assert!(message.contains("Default Terminal"));
+        assert!(message.contains("Preferences"));
     }
 
     #[test]

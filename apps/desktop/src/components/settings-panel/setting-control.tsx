@@ -47,13 +47,36 @@ function NumberControl({ value, onChange }: { value: number; onChange: (v: numbe
   );
 }
 
-function StringControl({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function StringControl({
+  value,
+  placeholder,
+  onChange,
+}: {
+  value: string;
+  placeholder?: string;
+  onChange: (v: string) => void;
+}) {
+  // A non-null draft belongs to the active edit. External persistence updates
+  // remain visible when idle, but cannot replace newer typing after a commit.
+  const [draft, setDraft] = useState<string | null>(null);
+  const displayedValue = draft ?? value;
+
+  const commit = () => {
+    if (displayedValue !== value) onChange(displayedValue);
+    setDraft(null);
+  };
+
   return (
     <input
       type="text"
-      value={value}
+      value={displayedValue}
+      placeholder={placeholder}
       aria-label="Text value"
-      onChange={(e) => onChange(e.target.value)}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+      }}
       className="w-64 h-9 rounded-lg border border-transparent bg-[var(--surface-input)] px-3 text-[13px] text-[var(--text-secondary)] font-[inherit] outline-none focus:border-[var(--focus-border)] focus-visible:outline-none"
     />
   );
@@ -219,7 +242,9 @@ function Control({
     case "number":
       return <NumberControl value={value as number} onChange={onChange} />;
     case "string":
-      return <StringControl value={value as string} onChange={onChange} />;
+      return (
+        <StringControl value={value as string} placeholder={def.placeholder} onChange={onChange} />
+      );
     case "font":
       return <FontControl def={def} value={value as string} onChange={onChange} />;
     case "enum":

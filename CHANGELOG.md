@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-08-10
+
+- Add a global **Default Terminal** preference under Workspace. Leave it blank for Writer's platform default, or enter a macOS application name / Windows or Linux executable to choose what the sidebar's **Open in Terminal** action launches. Values are trimmed, passed without shell interpretation, and invalid custom choices explain how to reset the preference.
+
 ## 2026-08-09
 
 - Add workspace actions to the native sidebar background menu. Right-click empty sidebar space or a section heading to create a Markdown file or folder at the workspace root, open the workspace in Terminal, or open it in Finder (Explorer/File Manager on other platforms), alongside the existing Search and Recents toggles. New entries use collision-safe Untitled names, expand Everything, and enter inline rename; empty folder-only trees now remain visible so new folders do not disappear.

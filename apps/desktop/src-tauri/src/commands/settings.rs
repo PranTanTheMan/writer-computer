@@ -32,6 +32,21 @@ fn with_settings_mut<T>(
     }
 }
 
+pub(crate) fn get_global_string_setting(
+    app: &tauri::AppHandle,
+    label: &str,
+    key: &str,
+) -> Result<String, AppError> {
+    let value = with_settings(app, label, |settings| {
+        settings.get_global_or_default(key).cloned()
+    })?
+    .ok_or_else(|| AppError::Io(format!("Missing setting: {key}")))?;
+    value
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| AppError::Io(format!("Setting {key} must be a string")))
+}
+
 /// Initialize a window's Settings layer. Called from the window setup path
 /// (main window in `setup`, secondary windows in `open_workspace_in_new_window`
 /// and the single-instance handler) so every window has its own merged view
@@ -106,17 +121,25 @@ pub fn set_setting(
     scope: String,
     webview: tauri::Webview,
     app: tauri::AppHandle,
-) -> Result<(), AppError> {
+) -> Result<Value, AppError> {
     let config_value =
         json_to_config_value(&value).ok_or_else(|| AppError::Io("Invalid value type".into()))?;
 
-    with_settings_mut(&app, webview.label(), |settings| {
+    let persisted = with_settings_mut(&app, webview.label(), |settings| {
         let result = match scope.as_str() {
             "workspace" => settings.set_workspace(&key, config_value),
             _ => settings.set_global(&key, config_value),
         };
-        result.map_err(|e| AppError::Io(e.to_string()))
-    })?
+        result.map_err(|e| AppError::Io(e.to_string()))?;
+        let value = match scope.as_str() {
+            "workspace" => settings.get(&key),
+            _ => settings.get_global_or_default(&key),
+        };
+        value
+            .cloned()
+            .ok_or_else(|| AppError::Io(format!("Missing setting after write: {key}")))
+    })??;
+    Ok(config_value_to_json(&persisted))
 }
 
 #[tauri::command]

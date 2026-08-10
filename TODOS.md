@@ -6,6 +6,7 @@
 
 ## Done
 
+- Configurable default terminal: [`SPECs/configurable-default-terminal-spec.md`](SPECs/configurable-default-terminal-spec.md) — add a global Workspace preference for the terminal app/executable used by the sidebar's Open in Terminal action, preserving the platform default when unset.
 - Sidebar empty-area workspace actions: [`SPECs/sidebar-empty-area-context-menu-spec.md`](SPECs/sidebar-empty-area-context-menu-spec.md) — right-click sidebar gaps and section headers to create a root file/folder, open the workspace in Terminal or Finder, and retain the existing Search/Recents visibility toggles.
 - Status bar + sidebar visibility toggles: [`SPECs/statusbar-sidebar-visibility-spec.md`](SPECs/statusbar-sidebar-visibility-spec.md) — hide/show each footer metric (words, characters, paragraphs) and the sidebar Search button and Recents section, via five new boolean settings and native right-click check-item menus on the footer and sidebar surface.
 - Select-only Typography font controls: [`SPECs/font-select-spec.md`](SPECs/font-select-spec.md) — replace the AppKit Font panel and editable stack field with a standard installed-family `<select>` matching the other settings controls; default UI/editor to SF Pro and the renamed Code font setting to SF Mono.

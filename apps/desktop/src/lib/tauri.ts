@@ -224,7 +224,7 @@ export function setSetting(
   key: string,
   value: unknown,
   scope: "global" | "workspace" = "global",
-): Promise<void> {
+): Promise<unknown> {
   return invoke("set_setting", { key, value, scope });
 }
 
