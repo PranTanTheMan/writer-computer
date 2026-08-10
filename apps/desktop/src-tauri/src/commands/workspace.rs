@@ -1,5 +1,6 @@
 use crate::commands::fs::{read_directory_impl, read_file_impl, DirEntry, FileContent};
 use crate::commands::search::index_workspace_impl;
+use crate::commands::settings::get_global_string_setting;
 use crate::error::AppError;
 use crate::ignore::WorkspaceIgnore;
 use crate::state::{AppState, WorkspaceState};
@@ -7,16 +8,314 @@ use crate::watcher::drop_watcher_off_thread;
 use crate::PendingOpenPayload;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspaceInfo {
     pub root: String,
     pub name: String,
     pub file_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LaunchPlatform {
+    MacOs,
+    Windows,
+    Linux,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TerminalLaunchSpec {
+    program: String,
+    args: Vec<String>,
+    current_dir: PathBuf,
+    new_console: bool,
+    execution: TerminalExecution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalExecution {
+    Detached,
+    WaitForSuccess,
+}
+
+const DEFAULT_TERMINAL_SETTING_KEY: &str = "workspace.default-terminal";
+
+fn terminal_launch_specs(
+    platform: LaunchPlatform,
+    root: &Path,
+    preferred_terminal: Option<&str>,
+    terminal_env: Option<&str>,
+) -> Vec<TerminalLaunchSpec> {
+    let spec = |program: &str,
+                args: Vec<String>,
+                new_console: bool,
+                execution: TerminalExecution| TerminalLaunchSpec {
+        program: program.to_string(),
+        args,
+        current_dir: root.to_path_buf(),
+        new_console,
+        execution,
+    };
+
+    if let Some(program) = preferred_terminal {
+        return match platform {
+            LaunchPlatform::MacOs => vec![spec(
+                "open",
+                vec![
+                    "-a".into(),
+                    program.into(),
+                    root.to_string_lossy().into_owned(),
+                ],
+                false,
+                TerminalExecution::WaitForSuccess,
+            )],
+            LaunchPlatform::Windows => {
+                vec![spec(program, Vec::new(), true, TerminalExecution::Detached)]
+            }
+            LaunchPlatform::Linux => vec![spec(
+                program,
+                Vec::new(),
+                false,
+                TerminalExecution::Detached,
+            )],
+        };
+    }
+
+    match platform {
+        LaunchPlatform::MacOs => vec![spec(
+            "open",
+            vec![
+                "-a".into(),
+                "Terminal".into(),
+                root.to_string_lossy().into_owned(),
+            ],
+            false,
+            TerminalExecution::WaitForSuccess,
+        )],
+        LaunchPlatform::Windows => vec![spec(
+            "cmd.exe",
+            vec!["/K".into()],
+            true,
+            TerminalExecution::Detached,
+        )],
+        LaunchPlatform::Linux => {
+            let mut programs = Vec::new();
+            if let Some(program) = terminal_env
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                programs.push(program.to_string());
+            }
+            for fallback in [
+                "x-terminal-emulator",
+                "ghostty",
+                "gnome-terminal",
+                "konsole",
+                "xfce4-terminal",
+            ] {
+                if !programs.iter().any(|program| program == fallback) {
+                    programs.push(fallback.to_string());
+                }
+            }
+            programs
+                .into_iter()
+                .map(|program| spec(&program, Vec::new(), false, TerminalExecution::Detached))
+                .collect()
+        }
+    }
+}
+
+fn current_launch_platform() -> LaunchPlatform {
+    match std::env::consts::OS {
+        "macos" => LaunchPlatform::MacOs,
+        "windows" => LaunchPlatform::Windows,
+        _ => LaunchPlatform::Linux,
+    }
+}
+
+fn validate_workspace_launch_root(path: &Path) -> Result<PathBuf, AppError> {
+    if !path.is_dir() {
+        return Err(AppError::NotFound(path.to_string_lossy().to_string()));
+    }
+    path.canonicalize()
+        .map_err(|error| AppError::Io(error.to_string()))
+}
+
+fn validate_terminal_target(
+    captured_root: &Path,
+    requested_path: Option<&Path>,
+) -> Result<PathBuf, AppError> {
+    let canonical_root = validate_workspace_launch_root(captured_root)?;
+    if canonical_root != captured_root {
+        return Err(AppError::InvalidPath(
+            captured_root.to_string_lossy().into_owned(),
+        ));
+    }
+
+    let requested_path = requested_path.unwrap_or(captured_root);
+    let target = validate_workspace_launch_root(requested_path)?;
+    if target != canonical_root && !target.starts_with(&canonical_root) {
+        return Err(AppError::InvalidPath(
+            requested_path.to_string_lossy().into_owned(),
+        ));
+    }
+    Ok(target)
+}
+
+fn validate_terminal_launch_snapshot(
+    state: &WorkspaceState,
+    captured_root: &Path,
+    captured_epoch: u64,
+) -> Result<(), AppError> {
+    let root_is_current = state.workspace_root.read().as_deref() == Some(captured_root);
+    if !root_is_current || !epoch_is_current(state, captured_epoch) {
+        return Err(AppError::InvalidPath(
+            "Workspace changed before the terminal could be opened".into(),
+        ));
+    }
+
+    let live_root = validate_workspace_launch_root(captured_root)?;
+    if live_root != captured_root {
+        return Err(AppError::InvalidPath(
+            "Workspace folder changed before the terminal could be opened".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_terminal_launch_boundary(
+    state: &WorkspaceState,
+    captured_root: &Path,
+    captured_epoch: u64,
+    requested_path: Option<&Path>,
+    captured_target: &Path,
+) -> Result<(), AppError> {
+    validate_terminal_launch_snapshot(state, captured_root, captured_epoch)?;
+    let live_target = validate_terminal_target(captured_root, requested_path)?;
+    if live_target != captured_target {
+        return Err(AppError::InvalidPath(
+            "Selected folder changed before the terminal could be opened".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn workspace_root_for_window(app: &tauri::AppHandle, label: &str) -> Result<PathBuf, AppError> {
+    app.state::<AppState>()
+        .get_or_create(label)
+        .workspace_root
+        .read()
+        .clone()
+        .ok_or(AppError::NoWorkspace)
+}
+
+fn terminal_launch_error(preferred_terminal: Option<&str>, reason: &str) -> AppError {
+    if let Some(preferred_terminal) = preferred_terminal {
+        AppError::Io(format!(
+            "Could not launch configured terminal {preferred_terminal:?}: {reason}. Clear or reset Default Terminal in Preferences."
+        ))
+    } else {
+        AppError::Io(reason.to_string())
+    }
+}
+
+fn launch_terminal(
+    root: &Path,
+    preferred_terminal: &str,
+    validate_before_launch: impl Fn() -> Result<(), AppError>,
+) -> Result<(), AppError> {
+    let preferred_terminal = (!preferred_terminal.is_empty()).then_some(preferred_terminal);
+    let terminal_env = std::env::var("TERMINAL").ok();
+    let specs = terminal_launch_specs(
+        current_launch_platform(),
+        root,
+        preferred_terminal,
+        terminal_env.as_deref(),
+    );
+    let mut last_error = None;
+
+    for launch in specs {
+        let mut command = Command::new(&launch.program);
+        command.args(&launch.args).current_dir(&launch.current_dir);
+
+        #[cfg(target_os = "windows")]
+        if launch.new_console {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+            command.creation_flags(CREATE_NEW_CONSOLE);
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = launch.new_console;
+
+        validate_before_launch()?;
+        match launch.execution {
+            TerminalExecution::Detached => match command.spawn() {
+                Ok(_) => return Ok(()),
+                Err(error) => last_error = Some(error.to_string()),
+            },
+            TerminalExecution::WaitForSuccess => match command.output() {
+                Ok(output) if output.status.success() => return Ok(()),
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let stderr = stderr.trim();
+                    last_error = Some(if stderr.is_empty() {
+                        format!("{} exited with {}", launch.program, output.status)
+                    } else {
+                        stderr.to_string()
+                    });
+                }
+                Err(error) => last_error = Some(error.to_string()),
+            },
+        }
+    }
+
+    Err(terminal_launch_error(
+        preferred_terminal,
+        last_error
+            .as_deref()
+            .unwrap_or("No terminal launcher is available"),
+    ))
+}
+
+#[tauri::command]
+pub async fn open_workspace_in_file_manager(
+    webview: tauri::Webview,
+    app: tauri::AppHandle,
+) -> Result<(), AppError> {
+    let root = workspace_root_for_window(&app, webview.label())?;
+    let root = tauri::async_runtime::spawn_blocking(move || validate_workspace_launch_root(&root))
+        .await
+        .map_err(|error| AppError::Io(error.to_string()))??;
+    app.opener()
+        .open_path(root.to_string_lossy().into_owned(), None::<String>)
+        .map_err(|error| AppError::Io(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn open_workspace_in_terminal(
+    path: Option<String>,
+    webview: tauri::Webview,
+    app: tauri::AppHandle,
+) -> Result<(), AppError> {
+    let state = app.state::<AppState>().get_or_create(webview.label());
+    let (root, epoch) = state.workspace_snapshot().ok_or(AppError::NoWorkspace)?;
+    let preferred_terminal =
+        get_global_string_setting(&app, webview.label(), DEFAULT_TERMINAL_SETTING_KEY)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let requested_path = path.as_deref().map(Path::new);
+        let target = validate_terminal_target(&root, requested_path)?;
+        launch_terminal(&target, &preferred_terminal, || {
+            validate_terminal_launch_boundary(&state, &root, epoch, requested_path, &target)
+        })
+    })
+    .await
+    .map_err(|error| AppError::Io(error.to_string()))?
 }
 
 /// Synchronous workspace setup shared by `open_workspace` and the bundled
@@ -64,10 +363,10 @@ fn prepare_workspace_state(
 
     let state = app.state::<AppState>().get_or_create(label);
 
-    // Bump the epoch before any reset or background spawn. Every background
-    // task captured the prior value; anything still running against it will
-    // drop its results on the floor.
-    let new_epoch = state.workspace_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+    // Publish the new root and epoch under one lock. Every background task
+    // captured the prior epoch and will drop its results on the floor; launch
+    // commands cannot observe a new epoch paired with the outgoing root.
+    let new_epoch = state.replace_workspace_root(root.clone());
 
     // Signal the outgoing walker to quit, then install a fresh token for the
     // new workspace. The old `Arc<AtomicBool>` is still held by the in-flight
@@ -84,7 +383,6 @@ fn prepare_workspace_state(
     };
 
     // Reset per-workspace state.
-    *state.workspace_root.write() = Some(root.clone());
     *state.standalone_file.write() = None;
     *state.file_index.write() = Vec::new();
     state.invalidate_recent_files_cache();
@@ -586,6 +884,275 @@ mod tests {
         let canonical = canonicalize_workspace_root(&raw).unwrap();
         assert!(canonical.is_absolute());
         assert_eq!(canonical, std::fs::canonicalize(&raw).unwrap());
+    }
+
+    #[test]
+    fn terminal_launch_specs_cover_defaults_and_explicit_preferences_exactly() {
+        let root = Path::new("/workspace with spaces");
+
+        let mac = terminal_launch_specs(LaunchPlatform::MacOs, root, None, None);
+        assert_eq!(mac.len(), 1);
+        assert_eq!(mac[0].program, "open");
+        assert_eq!(mac[0].args, ["-a", "Terminal", "/workspace with spaces"]);
+        assert_eq!(mac[0].current_dir, root);
+        assert!(!mac[0].new_console);
+        assert_eq!(mac[0].execution, TerminalExecution::WaitForSuccess);
+
+        let custom_mac = terminal_launch_specs(LaunchPlatform::MacOs, root, Some("iTerm"), None);
+        assert_eq!(custom_mac.len(), 1);
+        assert_eq!(custom_mac[0].program, "open");
+        assert_eq!(
+            custom_mac[0].args,
+            ["-a", "iTerm", "/workspace with spaces"]
+        );
+        assert_eq!(custom_mac[0].execution, TerminalExecution::WaitForSuccess);
+
+        let windows = terminal_launch_specs(LaunchPlatform::Windows, root, None, None);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].program, "cmd.exe");
+        assert_eq!(windows[0].args, ["/K"]);
+        assert_eq!(windows[0].current_dir, root);
+        assert!(windows[0].new_console);
+        assert_eq!(windows[0].execution, TerminalExecution::Detached);
+
+        let custom_windows = terminal_launch_specs(
+            LaunchPlatform::Windows,
+            root,
+            Some("C:\\Apps\\wt.exe"),
+            None,
+        );
+        assert_eq!(custom_windows.len(), 1);
+        assert_eq!(custom_windows[0].program, "C:\\Apps\\wt.exe");
+        assert!(custom_windows[0].args.is_empty());
+        assert_eq!(custom_windows[0].current_dir, root);
+        assert!(custom_windows[0].new_console);
+        assert_eq!(custom_windows[0].execution, TerminalExecution::Detached);
+
+        let linux = terminal_launch_specs(LaunchPlatform::Linux, root, None, Some(" ghostty "));
+        assert_eq!(
+            linux
+                .iter()
+                .map(|spec| spec.program.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "ghostty",
+                "x-terminal-emulator",
+                "gnome-terminal",
+                "konsole",
+                "xfce4-terminal"
+            ]
+        );
+        assert!(linux.iter().all(|spec| spec.args.is_empty()));
+        assert!(linux.iter().all(|spec| spec.current_dir == root));
+        assert!(linux.iter().all(|spec| !spec.new_console));
+        assert!(linux
+            .iter()
+            .all(|spec| spec.execution == TerminalExecution::Detached));
+
+        let linux_without_env = terminal_launch_specs(LaunchPlatform::Linux, root, None, None);
+        assert_eq!(
+            linux_without_env
+                .iter()
+                .map(|spec| spec.program.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "x-terminal-emulator",
+                "ghostty",
+                "gnome-terminal",
+                "konsole",
+                "xfce4-terminal"
+            ]
+        );
+
+        let opaque = "ghostty --execute 'not a flag'";
+        let custom_linux =
+            terminal_launch_specs(LaunchPlatform::Linux, root, Some(opaque), Some("other"));
+        assert_eq!(custom_linux.len(), 1);
+        assert_eq!(custom_linux[0].program, opaque);
+        assert!(custom_linux[0].args.is_empty());
+    }
+
+    #[test]
+    fn custom_terminal_errors_identify_the_preference_and_recovery() {
+        let error =
+            terminal_launch_error(Some("Missing Terminal"), "application could not be found");
+        let message = error.to_string();
+        assert!(message.contains("Missing Terminal"));
+        assert!(message.contains("Default Terminal"));
+        assert!(message.contains("Preferences"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_invalid_terminal_app_surfaces_the_open_helper_failure() {
+        let dir = TempDir::new().unwrap();
+        let preference = "Writer Definitely Missing Terminal 8B112EE0";
+        let error = launch_terminal(dir.path(), preference, || Ok(())).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains(preference));
+        assert!(message.contains("Default Terminal"));
+        assert!(message.contains("Preferences"));
+    }
+
+    #[test]
+    fn launch_root_validation_rejects_files_and_missing_paths() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "# Note").unwrap();
+
+        assert!(matches!(
+            validate_workspace_launch_root(&file).unwrap_err(),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            validate_workspace_launch_root(&dir.path().join("missing")).unwrap_err(),
+            AppError::NotFound(_)
+        ));
+    }
+
+    #[test]
+    fn terminal_target_validation_accepts_root_and_nested_directories() {
+        let workspace = TempDir::new().unwrap();
+        let nested = workspace.path().join("drafts").join("chapter one");
+        std::fs::create_dir_all(&nested).unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+
+        assert_eq!(validate_terminal_target(&root, None).unwrap(), root);
+        assert_eq!(
+            validate_terminal_target(&root, Some(&nested)).unwrap(),
+            nested.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn terminal_target_validation_rejects_files_missing_paths_and_siblings() {
+        let workspace = TempDir::new().unwrap();
+        let sibling = TempDir::new().unwrap();
+        let file = workspace.path().join("note.md");
+        std::fs::write(&file, "# Note").unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+
+        assert!(matches!(
+            validate_terminal_target(&root, Some(&file)).unwrap_err(),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            validate_terminal_target(&root, Some(&workspace.path().join("missing"))).unwrap_err(),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            validate_terminal_target(&root, Some(sibling.path())).unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_target_validation_accepts_internal_symlinks_and_rejects_external_ones() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = TempDir::new().unwrap();
+        let nested = workspace.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let internal_link = workspace.path().join("internal-link");
+        symlink(&nested, &internal_link).unwrap();
+
+        let outside = TempDir::new().unwrap();
+        let external_link = workspace.path().join("external-link");
+        symlink(outside.path(), &external_link).unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+
+        assert_eq!(
+            validate_terminal_target(&root, Some(&internal_link)).unwrap(),
+            nested.canonicalize().unwrap()
+        );
+        assert!(matches!(
+            validate_terminal_target(&root, Some(&external_link)).unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_target_validation_rejects_a_replaced_workspace_root() {
+        use std::os::unix::fs::symlink;
+
+        let parent = TempDir::new().unwrap();
+        let root_path = parent.path().join("workspace");
+        std::fs::create_dir(&root_path).unwrap();
+        let captured_root = root_path.canonicalize().unwrap();
+        std::fs::rename(&root_path, parent.path().join("moved-workspace")).unwrap();
+        let outside = TempDir::new().unwrap();
+        symlink(outside.path(), &root_path).unwrap();
+
+        assert!(matches!(
+            validate_terminal_target(&captured_root, None).unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_launch_boundary_rejects_delayed_target_and_root_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let parent = TempDir::new().unwrap();
+        let root_path = parent.path().join("workspace");
+        let selected_path = root_path.join("drafts");
+        std::fs::create_dir_all(&selected_path).unwrap();
+        let root = root_path.canonicalize().unwrap();
+        let target = validate_terminal_target(&root, Some(&selected_path)).unwrap();
+        let state = WorkspaceState::default();
+        let epoch = state.replace_workspace_root(root.clone());
+
+        let outside = TempDir::new().unwrap();
+        std::fs::rename(&selected_path, root_path.join("moved-drafts")).unwrap();
+        symlink(outside.path(), &selected_path).unwrap();
+        assert!(matches!(
+            validate_terminal_launch_boundary(&state, &root, epoch, Some(&selected_path), &target,)
+                .unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+
+        std::fs::remove_file(&selected_path).unwrap();
+        let root_target = validate_terminal_target(&root, None).unwrap();
+        std::fs::rename(&root_path, parent.path().join("moved-workspace")).unwrap();
+        symlink(outside.path(), &root_path).unwrap();
+        assert!(matches!(
+            validate_terminal_launch_boundary(&state, &root, epoch, None, &root_target)
+                .unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+    }
+
+    #[test]
+    fn terminal_launch_snapshot_rejects_workspace_switches_and_epoch_aba() {
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let first_root = first.path().canonicalize().unwrap();
+        let second_root = second.path().canonicalize().unwrap();
+        let state = WorkspaceState::default();
+        let first_epoch = state.replace_workspace_root(first_root.clone());
+        let (snapshotted_root, snapshotted_epoch) = state.workspace_snapshot().unwrap();
+        assert_eq!(
+            (snapshotted_root, snapshotted_epoch),
+            (first_root.clone(), first_epoch)
+        );
+
+        validate_terminal_launch_snapshot(&state, &first_root, first_epoch).unwrap();
+
+        state.replace_workspace_root(second_root);
+        assert!(matches!(
+            validate_terminal_launch_snapshot(&state, &first_root, first_epoch).unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+
+        state.replace_workspace_root(first_root.clone());
+        assert!(matches!(
+            validate_terminal_launch_snapshot(&state, &first_root, first_epoch).unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
     }
 
     #[cfg(target_os = "macos")]

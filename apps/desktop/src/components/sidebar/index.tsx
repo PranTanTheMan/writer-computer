@@ -1,7 +1,10 @@
 import { FileBrowser } from "./file-browser";
 import { WorkspaceSwitcher } from "./workspace-switcher";
+import { useWorkspaceGeneration } from "@/hooks/use-workspace";
 
 export function Sidebar() {
+  const workspaceGeneration = useWorkspaceGeneration();
+
   return (
     <div className="relative h-full overflow-hidden">
       <div
@@ -17,7 +20,7 @@ export function Sidebar() {
           }}
         />
         <div className="min-h-0 flex-1 overflow-hidden">
-          <FileBrowser />
+          <FileBrowser key={workspaceGeneration} />
         </div>
         <div className="shrink-0 px-3 py-3">
           <WorkspaceSwitcher />

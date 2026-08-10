@@ -1,17 +1,49 @@
-import type { MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Search01Icon } from "@hugeicons/core-free-icons";
 import { useOpenCommandPalette } from "@/hooks/use-command-palette";
 import { useBooleanSetting, useSetSetting } from "@/hooks/use-settings";
+import { useRefreshDirectory } from "@/hooks/use-file-tree";
+import { useWorkspaceRoot } from "@/hooks/use-workspace";
+import { getWorkspaceIdentity, isCurrentWorkspaceIdentity } from "@/hooks/workspace-api";
 import { ScrollFade } from "@/components/scroll-fade";
+import * as tauri from "@/lib/tauri";
+import { createSidebarEntryAndRename } from "./create-sidebar-entry-and-rename";
 import { SidebarNavigator } from "./sidebar-navigator";
 import { showSidebarSurfaceContextMenu } from "./sidebar-surface-context-menu";
+import { openSidebarDirectoryInTerminal } from "./sidebar-terminal-action";
 
 export function FileBrowser() {
   const openCommandPalette = useOpenCommandPalette();
   const setSetting = useSetSetting();
   const showSearch = useBooleanSetting("appearance.sidebar-show-search");
   const showRecents = useBooleanSetting("appearance.sidebar-show-recents");
+  const root = useWorkspaceRoot();
+  const refreshDirectory = useRefreshDirectory();
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [everythingCollapsed, setEverythingCollapsed] = useState(false);
+
+  const createRootEntry = (kind: tauri.SidebarEntryKind) => {
+    if (!root) return;
+    const identity = getWorkspaceIdentity();
+    void createSidebarEntryAndRename(kind, {
+      expandParent: () => setEverythingCollapsed(false),
+      createEntry: (entryKind) => tauri.createSidebarEntry(root, entryKind),
+      refreshRoot: () => refreshDirectory(root),
+      startRenaming: setRenamingPath,
+      isCurrentWorkspace: () => isCurrentWorkspaceIdentity(identity),
+    }).catch((error: unknown) => {
+      window.alert(
+        `Failed to create ${kind}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  };
+
+  const runWorkspaceAction = (label: string, action: () => Promise<void>) => {
+    void action().catch((error: unknown) => {
+      window.alert(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
 
   // File and folder rows stop propagation from their own context menus, so
   // this only fires for the sidebar surface: empty space, section headers,
@@ -21,6 +53,20 @@ export function FileBrowser() {
     void showSidebarSurfaceContextMenu({
       showSearch,
       showRecents,
+      workspaceActions: root
+        ? {
+            onNewFile: () => createRootEntry("file"),
+            onNewFolder: () => createRootEntry("folder"),
+            onOpenInTerminal: () => {
+              void openSidebarDirectoryInTerminal(null);
+            },
+            onOpenInFileManager: () =>
+              runWorkspaceAction(
+                "Failed to open workspace folder",
+                tauri.openWorkspaceInFileManager,
+              ),
+          }
+        : null,
       onToggleSearch: (visible) => {
         void setSetting("appearance.sidebar-show-search", visible);
       },
@@ -61,7 +107,12 @@ export function FileBrowser() {
       )}
 
       <ScrollFade className="min-h-0 flex-1 overflow-y-scroll scrollbar-none">
-        <SidebarNavigator />
+        <SidebarNavigator
+          renamingPath={renamingPath}
+          onRenamingPathChange={setRenamingPath}
+          everythingCollapsed={everythingCollapsed}
+          onEverythingCollapsedChange={setEverythingCollapsed}
+        />
       </ScrollFade>
     </div>
   );

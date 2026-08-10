@@ -8,6 +8,8 @@ pub enum AppError {
     NotFound(String),
     #[error("Already exists: {0}")]
     AlreadyExists(String),
+    #[error("Invalid path: {0}")]
+    InvalidPath(String),
     #[error("No workspace is open")]
     NoWorkspace,
 }

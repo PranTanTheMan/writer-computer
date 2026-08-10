@@ -68,6 +68,23 @@ describe("typography settings", () => {
   });
 });
 
+describe("default terminal setting", () => {
+  test("exposes the cross-platform terminal preference contract", () => {
+    const definition = SETTINGS_SCHEMA.find((def) => def.key === "workspace.default-terminal");
+    expect(definition).toMatchObject({
+      label: "Default Terminal",
+      description:
+        "Terminal application name on macOS, or executable name/full path on Windows and Linux. Leave blank for Writer's platform default; arguments are not supported.",
+      category: "Workspace",
+      type: "string",
+      placeholder: "Platform default",
+      normalize: "trim",
+      scope: "global",
+      default: "",
+    });
+  });
+});
+
 describe("theme presets", () => {
   test("at least one preset file is discovered", () => {
     expect(Object.keys(presetFiles).length).toBeGreaterThan(0);

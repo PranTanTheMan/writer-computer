@@ -60,6 +60,7 @@ export interface SettingDef {
   step?: number;
   cssVar?: string;
   cssFormat?: "px" | "raw";
+  placeholder?: string;
   default: unknown;
 }
 

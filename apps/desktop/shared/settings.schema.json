@@ -303,6 +303,17 @@
       "default": 10
     },
     {
+      "key": "workspace.default-terminal",
+      "label": "Default Terminal",
+      "description": "Terminal application name on macOS, or executable name/full path on Windows and Linux. Leave blank for Writer's platform default; arguments are not supported.",
+      "category": "Workspace",
+      "type": "string",
+      "placeholder": "Platform default",
+      "normalize": "trim",
+      "scope": "global",
+      "default": ""
+    },
+    {
       "key": "window.restore-workspace",
       "label": "Restore Workspace",
       "description": "Automatically reopen the last workspace when the app starts",

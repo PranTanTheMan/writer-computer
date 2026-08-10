@@ -8,6 +8,7 @@ export type FolderMenuActionId =
   | "new-folder"
   | "copy-relative-path"
   | "copy-absolute-path"
+  | "open-terminal"
   | "reveal"
   | "rename"
   | "delete";
@@ -17,6 +18,7 @@ export interface FolderContextMenuHandlers {
   onNewFolder: () => void;
   onCopyRelativePath: () => void;
   onCopyAbsolutePath: () => void;
+  onOpenInTerminal: () => void;
   onReveal: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -49,6 +51,12 @@ export function buildFolderMenuItemsSpec(
       action: handlers.onCopyAbsolutePath,
     },
     { kind: "separator" },
+    {
+      kind: "item",
+      id: "open-terminal",
+      text: "Open in Terminal",
+      action: handlers.onOpenInTerminal,
+    },
     {
       kind: "item",
       id: "reveal",

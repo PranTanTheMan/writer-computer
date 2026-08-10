@@ -1,22 +1,43 @@
 import { useState, type ReactNode } from "react";
 
-interface SidebarSectionProps {
+interface SidebarSectionBaseProps {
   title: string;
   children: ReactNode;
 }
 
+type SidebarSectionProps = SidebarSectionBaseProps &
+  (
+    | { collapsed: boolean; onCollapsedChange: (collapsed: boolean) => void }
+    | { collapsed?: never; onCollapsedChange?: never }
+  );
+
 export const SIDEBAR_SECTION_LABEL_CLASS =
   "group flex h-5 items-center gap-1 pl-3 pr-2 text-left text-[12px] font-medium tracking-normal text-[var(--text-muted)] opacity-60";
 
-export function SidebarSection({ title, children }: SidebarSectionProps) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+export function SidebarSection({
+  title,
+  children,
+  collapsed,
+  onCollapsedChange,
+}: SidebarSectionProps) {
+  const [internalCollapsed, setInternalCollapsed] = useState(false);
+  const isCollapsed = collapsed ?? internalCollapsed;
+
+  const toggleCollapsed = () => {
+    const next = !isCollapsed;
+    if (onCollapsedChange) {
+      onCollapsedChange(next);
+    } else {
+      setInternalCollapsed(next);
+    }
+  };
 
   return (
     <section className="flex flex-col gap-1" aria-label={title}>
       <button
         type="button"
         aria-expanded={!isCollapsed}
-        onClick={() => setIsCollapsed((collapsed) => !collapsed)}
+        onClick={toggleCollapsed}
         className={`${SIDEBAR_SECTION_LABEL_CLASS} hover:opacity-100`}
       >
         <span>{title}</span>

@@ -39,6 +39,12 @@ export function createDirectory(path: string): Promise<DirEntry> {
   return invoke("create_directory", { path });
 }
 
+export type SidebarEntryKind = "file" | "folder";
+
+export function createSidebarEntry(parentPath: string, kind: SidebarEntryKind): Promise<DirEntry> {
+  return invoke("create_sidebar_entry", { parentPath, kind });
+}
+
 export function renameEntry(oldPath: string, newPath: string): Promise<void> {
   return invoke("rename_entry", { oldPath, newPath });
 }
@@ -64,6 +70,14 @@ export function revealInFileManager(path: string): Promise<void> {
 // Workspace commands
 export function openWorkspace(path: string): Promise<WorkspaceInfo> {
   return invoke("open_workspace", { path });
+}
+
+export function openWorkspaceInFileManager(): Promise<void> {
+  return invoke("open_workspace_in_file_manager");
+}
+
+export function openDirectoryInTerminal(path: string | null): Promise<void> {
+  return invoke("open_workspace_in_terminal", { path });
 }
 
 /** Open a new in-process window for the given workspace. Each window owns
@@ -210,7 +224,7 @@ export function setSetting(
   key: string,
   value: unknown,
   scope: "global" | "workspace" = "global",
-): Promise<void> {
+): Promise<unknown> {
   return invoke("set_setting", { key, value, scope });
 }
 
