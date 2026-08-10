@@ -118,6 +118,12 @@ describe("filesystem IPC wrappers", () => {
 });
 
 describe("workspace IPC wrappers", () => {
+  test("closeWorkspace invalidates the expected workspace root", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+    await ipc.closeWorkspace("/test");
+    expect(mockedInvoke).toHaveBeenCalledWith("close_workspace", { root: "/test" });
+  });
+
   test("openWorkspace calls correct command", async () => {
     mockedInvoke.mockResolvedValue({ root: "/ws", name: "ws", file_count: 0 });
     await ipc.openWorkspace("/ws");

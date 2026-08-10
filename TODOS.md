@@ -6,6 +6,7 @@
 
 ## Done
 
+- PR #111 review fixes: [`SPECs/Agent/worksheet-pr111-review-fixes.md`](SPECs/Agent/worksheet-pr111-review-fixes.md) — guard creation and external launches against workspace switches, closes, and replaced roots; preserve cross-window global settings writes; and route the sidebar background menu through the full surface and rootless shell.
 - Folder-row Open in Terminal: [`SPECs/sidebar-empty-area-context-menu-spec.md`](SPECs/sidebar-empty-area-context-menu-spec.md) — add an Open in Terminal action to folder row context menus, launching the selected in-workspace directory with the configured terminal.
 - Configurable default terminal: [`SPECs/configurable-default-terminal-spec.md`](SPECs/configurable-default-terminal-spec.md) — add a global Workspace preference for the terminal app/executable used by the sidebar's Open in Terminal action, preserving the platform default when unset.
 - Sidebar empty-area workspace actions: [`SPECs/sidebar-empty-area-context-menu-spec.md`](SPECs/sidebar-empty-area-context-menu-spec.md) — right-click sidebar gaps and section headers to create a root file/folder, open the workspace in Terminal or Finder, and retain the existing Search/Recents visibility toggles.

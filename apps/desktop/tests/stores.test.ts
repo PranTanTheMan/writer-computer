@@ -1145,8 +1145,18 @@ describe("workspace-store closeWorkspace", () => {
     });
   });
 
-  test("closeWorkspace resets workspace and editor state", () => {
-    useWorkspaceStore.getState().closeWorkspace();
+  test("closeWorkspace invalidates the backend before resetting workspace and editor state", async () => {
+    const close = createDeferred<unknown>();
+    mockedInvoke.mockImplementation((command: string) =>
+      command === "close_workspace" ? close.promise : Promise.resolve(null),
+    );
+    const closing = useWorkspaceStore.getState().closeWorkspace();
+
+    expect(mockedInvoke).toHaveBeenCalledWith("close_workspace", { root: "/test" });
+    expect(useWorkspaceStore.getState().root).toBe("/test");
+
+    close.resolve(null);
+    await closing;
 
     const ws = useWorkspaceStore.getState();
     expect(ws.root).toBeNull();
@@ -1160,9 +1170,10 @@ describe("workspace-store closeWorkspace", () => {
     expect(ed.tabs).toEqual([]);
   });
 
-  test("closeWorkspace is no-op when no workspace is open", () => {
+  test("closeWorkspace is no-op when no workspace is open", async () => {
     useWorkspaceStore.setState({ root: null });
-    useWorkspaceStore.getState().closeWorkspace();
+    await useWorkspaceStore.getState().closeWorkspace();
     expect(useWorkspaceStore.getState().root).toBeNull();
+    expect(mockedInvoke).not.toHaveBeenCalledWith("close_workspace", expect.anything());
   });
 });

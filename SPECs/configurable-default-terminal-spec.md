@@ -10,6 +10,7 @@ Let users choose which terminal Writer opens from the sidebar's **Open in Termin
 - Its exact description is: **Terminal application name on macOS, or executable name/full path on Windows and Linux. Leave blank for Writer's platform default; arguments are not supported.**
 - The input placeholder is **Platform default**.
 - The setting persists at global scope through the existing settings pipeline. Like other global settings in the current multi-window architecture, each already-open window uses its independently hydrated value until that window reloads settings; new windows read the latest persisted value.
+- Global writes are serialized process-wide and merge against the latest on-disk config, so a stale already-open window cannot erase preferences written by another window.
 - A manually authored workspace override does not replace this app-level preference.
 - An empty value keeps Writer's current platform behavior:
   - macOS opens Terminal.app.
@@ -30,10 +31,12 @@ Let users choose which terminal Writer opens from the sidebar's **Open in Termin
 - The generic settings panel renders and persists the text field without terminal-specific frontend state.
 - The Rust settings boundary snapshots the invoking window's global/default value without holding the lock during launch; the workspace command owns platform-specific construction and execution.
 - Schema-aware config parsing preserves the raw lexical value of declared string settings before boolean/number inference, so executable names such as `TRUE`, `00123`, and `1e3` round-trip exactly.
+- The process-wide app state owns global-config write serialization; initialization/migrations and each writer refresh the per-window global layer from disk inside that critical section before applying one mutation. Global reads are fallible: a missing file becomes an empty layer, while any other read error aborts without mutating memory or writing a replacement config.
 
 ## Tests
 
 - TypeScript schema coverage asserts the setting contract shown by Preferences.
 - Rust tests cover exact default/custom launch specs on every modeled platform, settings-boundary trimming, shell-free argument construction, global/default lookup, macOS launcher-status failure mapping, and custom-preference reset/reload round trips (including lexically sensitive boolean- and number-looking strings such as `TRUE`, `00123`, and `1e3`).
+- Rust tests use two independently hydrated settings instances to prove later unrelated writes and resets preserve the first window's terminal preference, cover missing/read-error reload behavior, and exercise the shared serialization lock concurrently with initialization/migration.
 - Run `vp check`, `vp test`, `cargo test`, `cargo clippy`, and `cargo fmt --check`.
 - Launch the desktop app in development to verify the row renders in Preferences when the GUI environment permits.

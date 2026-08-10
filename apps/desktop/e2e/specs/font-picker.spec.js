@@ -8,7 +8,7 @@ const SELECTED_STACK = 'Menlo, Georgia, "Times New Roman", serif';
 
 describe("Settings font selects", function () {
   before(async function () {
-    const workspaceRestored = await $('button[aria-label="Hide sidebar"]')
+    const workspaceRestored = await $('[data-sidebar-surface][data-workspace-open="true"]')
       .waitForExist({ timeout: 3_000 })
       .catch(() => false);
     if (!workspaceRestored) {
@@ -28,6 +28,7 @@ describe("Settings font selects", function () {
     }, INITIAL_STACK);
     await browser.refresh();
     await $('button[aria-label="Hide sidebar"]').waitForExist({ timeout: 15_000 });
+    await $('[data-sidebar-surface][data-workspace-open="true"]').waitForExist({ timeout: 15_000 });
   });
 
   async function pressCmd(key) {

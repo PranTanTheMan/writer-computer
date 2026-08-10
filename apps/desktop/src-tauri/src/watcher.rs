@@ -30,9 +30,18 @@ macro_rules! wlog {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileChangeEvent {
     pub path: String,
     pub kind: String,
+    pub workspace: Option<WorkspaceIdentity>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceIdentity {
+    pub root: String,
+    pub epoch: u64,
 }
 
 /// True if `path` should be dropped before any further processing.
@@ -125,9 +134,15 @@ pub fn record_write(state: &WorkspaceState, path: &Path) {
 /// Push `path` into the file index if not already present, then refresh the
 /// `dirs_with_markdown` ancestry so the sidebar's "directory contains
 /// markdown" check returns true for newly-populated subtrees.
+#[cfg(test)]
 fn add_to_index(state: &WorkspaceState, path: &Path, root: &Path) {
-    let mut index = state.file_index.write();
     let modified_at = crate::commands::fs::modified_time(path);
+    add_to_index_with_modified(state, path, root, modified_at);
+}
+
+#[cfg(test)]
+fn add_to_index_with_modified(state: &WorkspaceState, path: &Path, root: &Path, modified_at: u64) {
+    let mut index = state.file_index.write();
     if let Some(file) = index.iter_mut().find(|f| f.path == path) {
         if file.modified_at != modified_at {
             file.modified_at = modified_at;
@@ -151,30 +166,17 @@ fn add_to_index(state: &WorkspaceState, path: &Path, root: &Path) {
         name,
         modified_at,
     });
+    state.file_index_revision.fetch_add(1, Ordering::SeqCst);
     drop(index);
     state.invalidate_recent_files_cache();
 
     state::register_ancestors(&mut state.dirs_with_markdown.write(), path, root);
 }
 
-/// Drop a single path from the file index and rebuild `dirs_with_markdown`.
-fn remove_from_index(state: &WorkspaceState, path: &Path, root: &Path) {
-    let removed = {
-        let mut index = state.file_index.write();
-        let before = index.len();
-        index.retain(|f| f.path != path);
-        before != index.len()
-    };
-    if removed {
-        state.invalidate_recent_files_cache();
-    }
-    let index = state.file_index.read();
-    *state.dirs_with_markdown.write() = state::rebuild_dirs_from_index(&index, root);
-}
-
 /// Drop every indexed path under `dir` (a removed folder) and rebuild
 /// `dirs_with_markdown`. Needed because FSEvents may report a single
 /// `Remove(Folder)` without per-child Remove events.
+#[cfg(test)]
 fn remove_subtree_from_index(state: &WorkspaceState, dir: &Path, root: &Path) {
     let dir_with_sep = {
         let mut s = dir.to_path_buf();
@@ -185,7 +187,11 @@ fn remove_subtree_from_index(state: &WorkspaceState, dir: &Path, root: &Path) {
         let mut index = state.file_index.write();
         let before = index.len();
         index.retain(|f| !f.path.starts_with(&dir_with_sep) && f.path != dir);
-        before != index.len()
+        let removed = before != index.len();
+        if removed {
+            state.file_index_revision.fetch_add(1, Ordering::SeqCst);
+        }
+        removed
     };
     if removed {
         state.invalidate_recent_files_cache();
@@ -202,48 +208,172 @@ fn remove_subtree_from_index(state: &WorkspaceState, dir: &Path, root: &Path) {
 /// not re-emit per-child Create events for a renamed inode, so without
 /// this walk every file under the new directory would silently disappear
 /// from search results until the workspace is reopened.
-fn add_subtree_to_index(state: &WorkspaceState, dir: &Path, root: &Path) {
+fn discover_subtree(dir: &Path) -> Vec<crate::state::IndexedFile> {
     let cancel = Arc::new(AtomicBool::new(false));
     let (found, _) = crate::commands::search::index_workspace_impl(dir, cancel);
-    if found.is_empty() {
-        return;
-    }
+    found
+}
 
-    let mut added = Vec::new();
-    {
-        let mut index = state.file_index.write();
-        for file in found {
-            if index.iter().any(|f| f.path == file.path) {
+struct PreparedIndexUpdate {
+    revision: u64,
+    index: Vec<crate::state::IndexedFile>,
+    dirs: std::collections::HashSet<std::path::PathBuf>,
+    changed: bool,
+}
+
+struct DeferredIndexDrop {
+    _index: Vec<crate::state::IndexedFile>,
+    _dirs: std::collections::HashSet<std::path::PathBuf>,
+    _recent_cache: Option<Vec<crate::state::IndexedFile>>,
+}
+
+fn prepare_index_removal(
+    state: &WorkspaceState,
+    root: &Path,
+    mut remove: impl FnMut(&crate::state::IndexedFile) -> bool,
+) -> PreparedIndexUpdate {
+    let revision = state.file_index_revision.load(Ordering::SeqCst);
+    let mut index = state.file_index.read().clone();
+    let before = index.len();
+    index.retain(|file| !remove(file));
+    let changed = index.len() != before;
+    let dirs = state::rebuild_dirs_from_index(&index, root);
+    PreparedIndexUpdate {
+        revision,
+        index,
+        dirs,
+        changed,
+    }
+}
+
+fn prepare_mtime_update(
+    state: &WorkspaceState,
+    root: &Path,
+    path: &Path,
+    modified_at: u64,
+) -> PreparedIndexUpdate {
+    let revision = state.file_index_revision.load(Ordering::SeqCst);
+    let mut index = state.file_index.read().clone();
+    let changed = index
+        .iter_mut()
+        .find(|file| file.path == path)
+        .is_some_and(|file| {
+            if file.modified_at == modified_at {
+                return false;
+            }
+            file.modified_at = modified_at;
+            true
+        });
+    let dirs = state::rebuild_dirs_from_index(&index, root);
+    PreparedIndexUpdate {
+        revision,
+        index,
+        dirs,
+        changed,
+    }
+}
+
+fn discovered_file(path: &Path, modified_at: u64) -> crate::state::IndexedFile {
+    crate::state::IndexedFile {
+        path: path.to_path_buf(),
+        relative_path: String::new(),
+        name: path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        modified_at,
+    }
+}
+
+fn prepare_subtree_merge(
+    state: &WorkspaceState,
+    found: Vec<crate::state::IndexedFile>,
+    root: &Path,
+) -> PreparedIndexUpdate {
+    let revision = state.file_index_revision.load(Ordering::SeqCst);
+    let mut index = state.file_index.read().clone();
+    let mut paths = index
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let mut changed = false;
+    for file in found {
+        if !paths.insert(file.path.clone()) {
+            continue;
+        }
+        let relative_path = file
+            .path
+            .strip_prefix(root)
+            .unwrap_or(&file.path)
+            .to_string_lossy()
+            .to_string();
+        index.push(crate::state::IndexedFile {
+            path: file.path,
+            relative_path,
+            name: file.name,
+            modified_at: file.modified_at,
+        });
+        changed = true;
+    }
+    let dirs = state::rebuild_dirs_from_index(&index, root);
+    PreparedIndexUpdate {
+        revision,
+        index,
+        dirs,
+        changed,
+    }
+}
+
+fn publish_index_update(
+    state: &WorkspaceState,
+    prepared: PreparedIndexUpdate,
+) -> Result<DeferredIndexDrop, PreparedIndexUpdate> {
+    let mut index = state.file_index.write();
+    if state.file_index_revision.load(Ordering::SeqCst) != prepared.revision {
+        return Err(prepared);
+    }
+    if prepared.changed {
+        let old_index = std::mem::replace(&mut *index, prepared.index);
+        let old_dirs = std::mem::replace(&mut *state.dirs_with_markdown.write(), prepared.dirs);
+        let old_recent_cache = state.recent_files_cache.write().take();
+        state.file_index_revision.fetch_add(1, Ordering::SeqCst);
+        return Ok(DeferredIndexDrop {
+            _index: old_index,
+            _dirs: old_dirs,
+            _recent_cache: old_recent_cache,
+        });
+    }
+    Ok(DeferredIndexDrop {
+        _index: prepared.index,
+        _dirs: prepared.dirs,
+        _recent_cache: None,
+    })
+}
+
+fn publish_prepared_index_for_snapshot(
+    state: &WorkspaceState,
+    root: &Path,
+    epoch: u64,
+    mut prepare: impl FnMut() -> PreparedIndexUpdate,
+) {
+    loop {
+        let prepared = prepare();
+        match state.with_workspace_snapshot(root, epoch, || publish_index_update(state, prepared)) {
+            Some(Err(stale)) => {
+                drop(stale);
                 continue;
             }
-            // Recompute relative_path against the workspace root rather than
-            // `dir` so the search index stays consistent with cold-start
-            // entries.
-            let rel = file
-                .path
-                .strip_prefix(root)
-                .unwrap_or(&file.path)
-                .to_string_lossy()
-                .to_string();
-            let path = file.path.clone();
-            index.push(crate::state::IndexedFile {
-                path: file.path,
-                relative_path: rel,
-                name: file.name,
-                modified_at: file.modified_at,
-            });
-            added.push(path);
+            Some(Ok(displaced)) => drop(displaced),
+            None => {}
         }
+        break;
     }
+}
 
-    if added.is_empty() {
-        return;
-    }
-    state.invalidate_recent_files_cache();
-    let mut dirs = state.dirs_with_markdown.write();
-    for p in added {
-        state::register_ancestors(&mut dirs, &p, root);
-    }
+#[cfg(test)]
+fn add_subtree_to_index(state: &WorkspaceState, dir: &Path, root: &Path) {
+    let prepared = prepare_subtree_merge(state, discover_subtree(dir), root);
+    assert!(publish_index_update(state, prepared).is_ok());
 }
 
 fn event_kind_str(kind: &EventKind) -> Option<&'static str> {
@@ -280,6 +410,7 @@ pub fn start_watcher(
     watcher.watch(&root_path, RecursiveMode::Recursive)?;
 
     let captured_epoch = epoch;
+    let watched_root = root_path.clone();
 
     // Spawn thread to process events
     let handle = app_handle.clone();
@@ -323,23 +454,20 @@ pub fn start_watcher(
                 break;
             };
 
-            // Drop the whole batch if the workspace has moved on.
-            if state.workspace_epoch.load(Ordering::SeqCst) != captured_epoch {
+            if state.workspace_snapshot().as_ref() != Some(&(watched_root.clone(), captured_epoch))
+            {
                 pending.clear();
                 last_emit = Instant::now();
                 continue;
             }
 
             let mut rebuild_ignore = false;
-            let root_for_filter = state.workspace_root.read().clone();
 
             for event in pending.drain(..) {
                 for path in &event.paths {
-                    if let Some(ref root) = root_for_filter {
-                        if should_ignore(path, root) {
-                            wlog!("filter[should_ignore]: {}", path.display());
-                            continue;
-                        }
+                    if should_ignore(path, &watched_root) {
+                        wlog!("filter[should_ignore]: {}", path.display());
+                        continue;
                     }
 
                     // `.gitignore` changes defer to a background rebuild.
@@ -378,9 +506,12 @@ pub fn start_watcher(
                         && path.extension().and_then(|e| e.to_str()) == Some("md")
                         && path.exists()
                     {
-                        state.update_index_modified_at(
-                            path,
-                            crate::commands::fs::modified_time(path),
+                        let modified_at = crate::commands::fs::modified_time(path);
+                        publish_prepared_index_for_snapshot(
+                            &state,
+                            &watched_root,
+                            captured_epoch,
+                            || prepare_mtime_update(&state, &watched_root, path, modified_at),
                         );
                     }
 
@@ -395,6 +526,10 @@ pub fn start_watcher(
                     let payload = FileChangeEvent {
                         path: path.to_string_lossy().to_string(),
                         kind: kind_str.to_string(),
+                        workspace: Some(WorkspaceIdentity {
+                            root: watched_root.to_string_lossy().into_owned(),
+                            epoch: captured_epoch,
+                        }),
                     };
 
                     if is_dir {
@@ -407,10 +542,31 @@ pub fn start_watcher(
                         // `.writer/config` changes reload settings instead.
                         if is_config_file(path) {
                             wlog!("emit settings:changed {}", path.display());
-                            if let Some(ref mut s) = *state.settings.write() {
-                                s.reload_workspace();
-                            }
-                            let _ = handle.emit_to(label.clone(), "settings:changed", ());
+                            let loader = state
+                                .settings
+                                .read()
+                                .as_ref()
+                                .map(|settings| settings.workspace_loader());
+                            let layer = loader.map(|loader| loader.read(&watched_root));
+                            let _ = state.with_workspace_snapshot(
+                                &watched_root,
+                                captured_epoch,
+                                || {
+                                    if let (Some(settings), Some(layer)) =
+                                        (state.settings.write().as_mut(), layer)
+                                    {
+                                        settings.install_workspace_layer(layer);
+                                    }
+                                },
+                            );
+                            let _ = handle.emit_to(
+                                label.clone(),
+                                "settings:changed",
+                                WorkspaceIdentity {
+                                    root: watched_root.to_string_lossy().into_owned(),
+                                    epoch: captured_epoch,
+                                },
+                            );
                             continue;
                         }
 
@@ -440,26 +596,56 @@ pub fn start_watcher(
                     // us which side of the rename this path is.
                     let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
                     let path_exists = path.exists();
-                    if let Some(ref root) = root_for_filter {
-                        if is_md {
-                            if path_exists {
-                                add_to_index(&state, path, root);
-                            } else {
-                                remove_from_index(&state, path, root);
-                            }
-                        } else if path_exists && is_dir {
-                            // A folder entered the watched tree (Create or
-                            // rename-in). FSEvents won't re-emit Create events
-                            // for descendants, so walk now to keep the index
-                            // in sync.
-                            add_subtree_to_index(&state, path, root);
-                        } else if !path_exists {
-                            // A vanished non-`.md` path could be a renamed-
-                            // away folder; FSEvents may not emit per-child
-                            // events for the descendants, so prune anything
-                            // the index still holds under it.
-                            remove_subtree_from_index(&state, path, root);
+                    if is_md {
+                        if path_exists {
+                            let modified_at = crate::commands::fs::modified_time(path);
+                            let found = vec![discovered_file(path, modified_at)];
+                            publish_prepared_index_for_snapshot(
+                                &state,
+                                &watched_root,
+                                captured_epoch,
+                                || prepare_subtree_merge(&state, found.clone(), &watched_root),
+                            );
+                        } else {
+                            publish_prepared_index_for_snapshot(
+                                &state,
+                                &watched_root,
+                                captured_epoch,
+                                || {
+                                    prepare_index_removal(&state, &watched_root, |file| {
+                                        file.path.as_path() == path.as_path()
+                                    })
+                                },
+                            );
                         }
+                    } else if path_exists && is_dir {
+                        // A folder entered the watched tree (Create or
+                        // rename-in). FSEvents won't re-emit Create events
+                        // for descendants, so walk now to keep the index
+                        // in sync.
+                        let found = discover_subtree(path);
+                        publish_prepared_index_for_snapshot(
+                            &state,
+                            &watched_root,
+                            captured_epoch,
+                            || prepare_subtree_merge(&state, found.clone(), &watched_root),
+                        );
+                    } else if !path_exists {
+                        // A vanished non-`.md` path could be a renamed-
+                        // away folder; FSEvents may not emit per-child
+                        // events for the descendants, so prune anything
+                        // the index still holds under it.
+                        publish_prepared_index_for_snapshot(
+                            &state,
+                            &watched_root,
+                            captured_epoch,
+                            || {
+                                prepare_index_removal(&state, &watched_root, |file| {
+                                    file.path.as_path() == path.as_path()
+                                        || file.path.starts_with(path)
+                                })
+                            },
+                        );
                     }
 
                     // Refresh the parent directory's listing. Without this,
@@ -468,13 +654,18 @@ pub fn start_watcher(
                     if !is_dir {
                         if let Some(parent) = path.parent() {
                             wlog!("emit fs:directory-changed (parent) {}", parent.display());
+                            let parent_payload = FileChangeEvent {
+                                path: parent.to_string_lossy().to_string(),
+                                kind: "modified".to_string(),
+                                workspace: Some(WorkspaceIdentity {
+                                    root: watched_root.to_string_lossy().into_owned(),
+                                    epoch: captured_epoch,
+                                }),
+                            };
                             let _ = handle.emit_to(
                                 label.clone(),
                                 "fs:directory-changed",
-                                &FileChangeEvent {
-                                    path: parent.to_string_lossy().to_string(),
-                                    kind: "modified".to_string(),
-                                },
+                                &parent_payload,
                             );
                         }
                     }
@@ -482,9 +673,12 @@ pub fn start_watcher(
             }
 
             if rebuild_ignore {
-                if let Some(root) = state.workspace_root.read().clone() {
-                    spawn_ignore_rebuild(handle.clone(), label.clone(), root, captured_epoch);
-                }
+                spawn_ignore_rebuild(
+                    handle.clone(),
+                    label.clone(),
+                    watched_root.clone(),
+                    captured_epoch,
+                );
             }
 
             last_emit = Instant::now();
@@ -582,6 +776,7 @@ pub fn start_file_watcher(
                         &FileChangeEvent {
                             path: path.to_string_lossy().to_string(),
                             kind: kind_str.to_string(),
+                            workspace: None,
                         },
                     );
                 }
@@ -609,18 +804,24 @@ fn spawn_ignore_rebuild(
             return;
         };
 
-        // Bail out if the workspace was swapped while we were walking.
-        if state.workspace_epoch.load(Ordering::SeqCst) != captured_epoch {
+        if state
+            .with_workspace_snapshot(&root, captured_epoch, || {
+                *state.workspace_ignore.write() = Some(new_matcher);
+            })
+            .is_none()
+        {
             return;
         }
-        *state.workspace_ignore.write() = Some(new_matcher);
-
         let _ = handle.emit_to(
             window_label,
             "fs:directory-changed",
             FileChangeEvent {
                 path: root.to_string_lossy().to_string(),
                 kind: "modified".to_string(),
+                workspace: Some(WorkspaceIdentity {
+                    root: root.to_string_lossy().into_owned(),
+                    epoch: captured_epoch,
+                }),
             },
         );
     });
@@ -798,6 +999,34 @@ mod tests {
         add_subtree_to_index(&state, &root, &root);
         add_subtree_to_index(&state, &root, &root);
         assert_eq!(state.file_index.read().len(), 1);
+    }
+
+    #[test]
+    fn prepared_index_publication_rejects_a_changed_revision() {
+        let state = WorkspaceState::default();
+        let root = PathBuf::from("/ws");
+        let found = vec![discovered_file(&root.join("new.md"), 1)];
+        let prepared = prepare_subtree_merge(&state, found, &root);
+
+        state.file_index_revision.fetch_add(1, Ordering::SeqCst);
+
+        assert!(publish_index_update(&state, prepared).is_err());
+        assert!(state.file_index.read().is_empty());
+    }
+
+    #[test]
+    fn workspace_identity_serialization_matches_the_shared_contract() {
+        let expected: serde_json::Value = serde_json::from_str(include_str!(
+            "../../shared/workspace-identity.contract.json"
+        ))
+        .unwrap();
+        let actual = serde_json::to_value(WorkspaceIdentity {
+            root: "/workspace".to_string(),
+            epoch: 7,
+        })
+        .unwrap();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]

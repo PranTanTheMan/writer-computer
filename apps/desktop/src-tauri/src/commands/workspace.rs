@@ -3,13 +3,13 @@ use crate::commands::search::index_workspace_impl;
 use crate::commands::settings::get_global_string_setting;
 use crate::error::AppError;
 use crate::ignore::WorkspaceIgnore;
-use crate::state::{AppState, WorkspaceState};
+use crate::state::{AppState, WorkspaceRuntimeDrop, WorkspaceState};
 use crate::watcher::drop_watcher_off_thread;
 use crate::PendingOpenPayload;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
@@ -20,6 +20,14 @@ pub struct WorkspaceInfo {
     pub root: String,
     pub name: String,
     pub file_count: usize,
+    pub epoch: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IndexCompleteEvent {
+    workspace: crate::watcher::WorkspaceIdentity,
+    file_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,9 +54,13 @@ enum TerminalExecution {
 
 const DEFAULT_TERMINAL_SETTING_KEY: &str = "workspace.default-terminal";
 
+fn drop_workspace_runtime_off_thread(runtime: WorkspaceRuntimeDrop) {
+    std::thread::spawn(move || drop(runtime));
+}
+
 fn terminal_launch_specs(
     platform: LaunchPlatform,
-    root: &Path,
+    target_dir: &Path,
     preferred_terminal: Option<&str>,
     terminal_env: Option<&str>,
 ) -> Vec<TerminalLaunchSpec> {
@@ -58,53 +70,48 @@ fn terminal_launch_specs(
                 execution: TerminalExecution| TerminalLaunchSpec {
         program: program.to_string(),
         args,
-        current_dir: root.to_path_buf(),
+        current_dir: target_dir.to_path_buf(),
         new_console,
         execution,
     };
 
-    if let Some(program) = preferred_terminal {
-        return match platform {
-            LaunchPlatform::MacOs => vec![spec(
-                "open",
-                vec![
-                    "-a".into(),
-                    program.into(),
-                    root.to_string_lossy().into_owned(),
-                ],
-                false,
-                TerminalExecution::WaitForSuccess,
-            )],
-            LaunchPlatform::Windows => {
-                vec![spec(program, Vec::new(), true, TerminalExecution::Detached)]
-            }
-            LaunchPlatform::Linux => vec![spec(
-                program,
-                Vec::new(),
-                false,
-                TerminalExecution::Detached,
-            )],
-        };
-    }
-
-    match platform {
-        LaunchPlatform::MacOs => vec![spec(
+    match (platform, preferred_terminal) {
+        (LaunchPlatform::MacOs, Some(program)) => vec![spec(
             "open",
             vec![
                 "-a".into(),
-                "Terminal".into(),
-                root.to_string_lossy().into_owned(),
+                program.into(),
+                target_dir.to_string_lossy().into_owned(),
             ],
             false,
             TerminalExecution::WaitForSuccess,
         )],
-        LaunchPlatform::Windows => vec![spec(
+        (LaunchPlatform::MacOs, None) => vec![spec(
+            "open",
+            vec![
+                "-a".into(),
+                "Terminal".into(),
+                target_dir.to_string_lossy().into_owned(),
+            ],
+            false,
+            TerminalExecution::WaitForSuccess,
+        )],
+        (LaunchPlatform::Windows, Some(program)) => {
+            vec![spec(program, Vec::new(), true, TerminalExecution::Detached)]
+        }
+        (LaunchPlatform::Windows, None) => vec![spec(
             "cmd.exe",
             vec!["/K".into()],
             true,
             TerminalExecution::Detached,
         )],
-        LaunchPlatform::Linux => {
+        (LaunchPlatform::Linux, Some(program)) => vec![spec(
+            program,
+            Vec::new(),
+            false,
+            TerminalExecution::Detached,
+        )],
+        (LaunchPlatform::Linux, None) => {
             let mut programs = Vec::new();
             if let Some(program) = terminal_env
                 .map(str::trim)
@@ -168,6 +175,7 @@ fn validate_terminal_target(
     Ok(target)
 }
 
+#[cfg(test)]
 fn validate_terminal_launch_snapshot(
     state: &WorkspaceState,
     captured_root: &Path,
@@ -189,6 +197,7 @@ fn validate_terminal_launch_snapshot(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_terminal_launch_boundary(
     state: &WorkspaceState,
     captured_root: &Path,
@@ -196,23 +205,58 @@ fn validate_terminal_launch_boundary(
     requested_path: Option<&Path>,
     captured_target: &Path,
 ) -> Result<(), AppError> {
-    validate_terminal_launch_snapshot(state, captured_root, captured_epoch)?;
-    let live_target = validate_terminal_target(captured_root, requested_path)?;
-    if live_target != captured_target {
-        return Err(AppError::InvalidPath(
-            "Selected folder changed before the terminal could be opened".into(),
-        ));
-    }
-    Ok(())
+    with_terminal_launch_snapshot(
+        state,
+        captured_root,
+        captured_epoch,
+        requested_path,
+        captured_target,
+        || Ok(()),
+    )
 }
 
-fn workspace_root_for_window(app: &tauri::AppHandle, label: &str) -> Result<PathBuf, AppError> {
-    app.state::<AppState>()
-        .get_or_create(label)
-        .workspace_root
-        .read()
-        .clone()
-        .ok_or(AppError::NoWorkspace)
+fn with_terminal_launch_snapshot<T>(
+    state: &WorkspaceState,
+    captured_root: &Path,
+    captured_epoch: u64,
+    requested_path: Option<&Path>,
+    captured_target: &Path,
+    launch: impl FnOnce() -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    state
+        .with_workspace_snapshot(captured_root, captured_epoch, || {
+            let live_target = validate_terminal_target(captured_root, requested_path)?;
+            if live_target != captured_target {
+                return Err(AppError::InvalidPath(
+                    "Selected folder changed before the terminal could be opened".into(),
+                ));
+            }
+            launch()
+        })
+        .ok_or_else(|| {
+            AppError::InvalidPath("Workspace changed before the terminal could be opened".into())
+        })?
+}
+
+fn open_workspace_in_file_manager_for_snapshot<T>(
+    state: &WorkspaceState,
+    captured_root: &Path,
+    captured_epoch: u64,
+    open: impl FnOnce(&Path) -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    state
+        .with_workspace_snapshot(captured_root, captured_epoch, || {
+            let live_root = validate_workspace_launch_root(captured_root)?;
+            if live_root != captured_root {
+                return Err(AppError::InvalidPath(
+                    "Workspace folder changed before it could be opened".into(),
+                ));
+            }
+            open(&live_root)
+        })
+        .ok_or_else(|| {
+            AppError::InvalidPath("Workspace changed before it could be opened".into())
+        })?
 }
 
 fn terminal_launch_error(preferred_terminal: Option<&str>, reason: &str) -> AppError {
@@ -226,15 +270,15 @@ fn terminal_launch_error(preferred_terminal: Option<&str>, reason: &str) -> AppE
 }
 
 fn launch_terminal(
-    root: &Path,
+    target_dir: &Path,
     preferred_terminal: &str,
-    validate_before_launch: impl Fn() -> Result<(), AppError>,
+    mut spawn_command: impl FnMut(&mut Command) -> Result<Result<Child, String>, AppError>,
 ) -> Result<(), AppError> {
     let preferred_terminal = (!preferred_terminal.is_empty()).then_some(preferred_terminal);
     let terminal_env = std::env::var("TERMINAL").ok();
     let specs = terminal_launch_specs(
         current_launch_platform(),
-        root,
+        target_dir,
         preferred_terminal,
         terminal_env.as_deref(),
     );
@@ -253,25 +297,36 @@ fn launch_terminal(
         #[cfg(not(target_os = "windows"))]
         let _ = launch.new_console;
 
-        validate_before_launch()?;
         match launch.execution {
-            TerminalExecution::Detached => match command.spawn() {
-                Ok(_) => return Ok(()),
-                Err(error) => last_error = Some(error.to_string()),
+            TerminalExecution::Detached => match spawn_command(&mut command) {
+                Ok(Ok(_)) => return Ok(()),
+                Ok(Err(error)) => last_error = Some(error),
+                Err(error) => return Err(error),
             },
-            TerminalExecution::WaitForSuccess => match command.output() {
-                Ok(output) if output.status.success() => return Ok(()),
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let stderr = stderr.trim();
-                    last_error = Some(if stderr.is_empty() {
-                        format!("{} exited with {}", launch.program, output.status)
-                    } else {
-                        stderr.to_string()
-                    });
+            TerminalExecution::WaitForSuccess => {
+                command.stdout(Stdio::piped()).stderr(Stdio::piped());
+                let output = match spawn_command(&mut command) {
+                    Ok(Ok(child)) => child.wait_with_output(),
+                    Ok(Err(error)) => {
+                        last_error = Some(error);
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                match output {
+                    Ok(output) if output.status.success() => return Ok(()),
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let stderr = stderr.trim();
+                        last_error = Some(if stderr.is_empty() {
+                            format!("{} exited with {}", launch.program, output.status)
+                        } else {
+                            stderr.to_string()
+                        });
+                    }
+                    Err(error) => last_error = Some(error.to_string()),
                 }
-                Err(error) => last_error = Some(error.to_string()),
-            },
+            }
         }
     }
 
@@ -288,13 +343,34 @@ pub async fn open_workspace_in_file_manager(
     webview: tauri::Webview,
     app: tauri::AppHandle,
 ) -> Result<(), AppError> {
-    let root = workspace_root_for_window(&app, webview.label())?;
-    let root = tauri::async_runtime::spawn_blocking(move || validate_workspace_launch_root(&root))
-        .await
-        .map_err(|error| AppError::Io(error.to_string()))??;
-    app.opener()
-        .open_path(root.to_string_lossy().into_owned(), None::<String>)
-        .map_err(|error| AppError::Io(error.to_string()))
+    let state = app.state::<AppState>().get_or_create(webview.label());
+    let (root, epoch) = state.workspace_snapshot().ok_or(AppError::NoWorkspace)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        open_workspace_in_file_manager_for_snapshot(&state, &root, epoch, |live_root| {
+            app.opener()
+                .open_path(live_root.to_string_lossy().into_owned(), None::<String>)
+                .map_err(|error| AppError::Io(error.to_string()))
+        })
+    })
+    .await
+    .map_err(|error| AppError::Io(error.to_string()))?
+}
+
+#[tauri::command]
+pub fn close_workspace(
+    root: String,
+    webview: tauri::Webview,
+    app: tauri::AppHandle,
+) -> Result<(), AppError> {
+    let state = app.state::<AppState>().get_or_create(webview.label());
+    let expected_root = PathBuf::from(&root);
+    let runtime = state
+        .clear_workspace_if_current(&expected_root)
+        .map_err(|()| {
+            AppError::InvalidPath("Workspace changed before it could be closed".into())
+        })?;
+    drop_workspace_runtime_off_thread(runtime);
+    Ok(())
 }
 
 #[tauri::command]
@@ -310,8 +386,10 @@ pub async fn open_workspace_in_terminal(
     tauri::async_runtime::spawn_blocking(move || {
         let requested_path = path.as_deref().map(Path::new);
         let target = validate_terminal_target(&root, requested_path)?;
-        launch_terminal(&target, &preferred_terminal, || {
-            validate_terminal_launch_boundary(&state, &root, epoch, requested_path, &target)
+        launch_terminal(&target, &preferred_terminal, |command| {
+            with_terminal_launch_snapshot(&state, &root, epoch, requested_path, &target, || {
+                Ok(command.spawn().map_err(|error| error.to_string()))
+            })
         })
     })
     .await
@@ -363,46 +441,8 @@ fn prepare_workspace_state(
 
     let state = app.state::<AppState>().get_or_create(label);
 
-    // Publish the new root and epoch under one lock. Every background task
-    // captured the prior epoch and will drop its results on the floor; launch
-    // commands cannot observe a new epoch paired with the outgoing root.
-    let new_epoch = state.replace_workspace_root(root.clone());
-
-    // Signal the outgoing walker to quit, then install a fresh token for the
-    // new workspace. The old `Arc<AtomicBool>` is still held by the in-flight
-    // walker; flipping it propagates to every walker thread within one
-    // directory boundary. Replacing the state slot with a fresh `Arc` leaves
-    // the flipped token alive inside the old walker but gives the new walker
-    // a clean signal.
-    let new_cancel = {
-        let mut guard = state.cancel_index.write();
-        guard.store(true, Ordering::SeqCst);
-        let fresh = Arc::new(AtomicBool::new(false));
-        *guard = Arc::clone(&fresh);
-        fresh
-    };
-
-    // Reset per-workspace state.
-    *state.standalone_file.write() = None;
-    *state.file_index.write() = Vec::new();
-    state.invalidate_recent_files_cache();
-    *state.dirs_with_markdown.write() = Default::default();
-    state.index_ready.store(false, Ordering::Relaxed);
-
-    // Install a cheap bootstrap matcher synchronously so the first
-    // `read_directory` call already hides `node_modules` / `.git`. The full
-    // matcher loads on the background thread below.
-    *state.workspace_ignore.write() = Some(Arc::new(WorkspaceIgnore::bootstrap()));
-
-    // Move the old watcher's `Drop` off the IPC thread — `notify`'s Drop can
-    // briefly block on FSEvents unregistration — so the IPC returns promptly.
-    let old_watcher = state.watcher_handle.write().take();
-    drop_watcher_off_thread(old_watcher);
-
-    // Load workspace-level settings (cheap, reads `.writer/config` on disk).
-    if let Some(settings) = state.settings.write().as_mut() {
-        settings.load_workspace(&root);
-    }
+    let (new_epoch, new_cancel, old_runtime) = state.transition_to_workspace(root.clone());
+    drop_workspace_runtime_off_thread(old_runtime);
 
     // Save to recent workspaces (one small JSON write). The canonical form is
     // stored so opening the same workspace via different aliases dedupes.
@@ -422,6 +462,7 @@ fn prepare_workspace_state(
         root: canonical_path,
         name,
         file_count: 0,
+        epoch: new_epoch,
     })
 }
 
@@ -449,13 +490,15 @@ fn run_workspace_bootstrap(
     // (per-directory inotify watches) — either way it's off the IPC thread.
     match crate::watcher::start_watcher(handle.clone(), label.clone(), &root, epoch) {
         Ok(watcher) => {
-            let mut guard = state.watcher_handle.write();
-            if !epoch_is_current(&state, epoch) {
-                // Don't install a stale watcher; let it drop.
-                drop(watcher);
+            let mut watcher = Some(watcher);
+            if state
+                .with_workspace_snapshot(&root, epoch, || {
+                    *state.watcher_handle.write() = watcher.take();
+                })
+                .is_none()
+            {
                 return;
             }
-            *guard = Some(watcher);
         }
         Err(e) => {
             eprintln!("Failed to start file watcher: {}", e);
@@ -465,21 +508,25 @@ fn run_workspace_bootstrap(
     // Load the full gitignore matcher. Walks every directory looking for
     // `.gitignore` files; bounded but not trivial on large repos.
     let new_ignore = Arc::new(WorkspaceIgnore::load(&root));
+    if state
+        .with_workspace_snapshot(&root, epoch, || {
+            *state.workspace_ignore.write() = Some(new_ignore);
+        })
+        .is_none()
     {
-        if !epoch_is_current(&state, epoch) {
-            return;
-        }
-        *state.workspace_ignore.write() = Some(new_ignore);
+        return;
     }
-
-    // Nudge the sidebar so custom ignore rules take effect immediately
-    // without waiting for a file event.
+    let root_string = root.to_string_lossy().into_owned();
     let _ = handle.emit_to(
         label.clone(),
         "fs:directory-changed",
         crate::watcher::FileChangeEvent {
-            path: root.to_string_lossy().to_string(),
+            path: root_string.clone(),
             kind: "modified".to_string(),
+            workspace: Some(crate::watcher::WorkspaceIdentity {
+                root: root_string.clone(),
+                epoch,
+            }),
         },
     );
 
@@ -491,15 +538,29 @@ fn run_workspace_bootstrap(
     }
     let file_count = indexed.len();
 
-    if !epoch_is_current(&state, epoch) {
+    let displaced = state.with_workspace_snapshot(&root, epoch, || {
+        let old_index = std::mem::replace(&mut *state.file_index.write(), indexed);
+        let old_cache = state.recent_files_cache.write().take();
+        let old_dirs = std::mem::replace(&mut *state.dirs_with_markdown.write(), dirs);
+        state.file_index_revision.fetch_add(1, Ordering::SeqCst);
+        state.index_ready.store(true, Ordering::Relaxed);
+        (old_index, old_cache, old_dirs)
+    });
+    let Some(displaced) = displaced else {
         return;
-    }
-    *state.file_index.write() = indexed;
-    state.invalidate_recent_files_cache();
-    *state.dirs_with_markdown.write() = dirs;
-    state.index_ready.store(true, Ordering::Relaxed);
-
-    let _ = handle.emit_to(label, "index:complete", file_count);
+    };
+    drop(displaced);
+    let _ = handle.emit_to(
+        label,
+        "index:complete",
+        IndexCompleteEvent {
+            workspace: crate::watcher::WorkspaceIdentity {
+                root: root_string,
+                epoch,
+            },
+            file_count,
+        },
+    );
 }
 
 fn epoch_is_current(state: &WorkspaceState, captured: u64) -> bool {
@@ -987,7 +1048,10 @@ mod tests {
     fn macos_invalid_terminal_app_surfaces_the_open_helper_failure() {
         let dir = TempDir::new().unwrap();
         let preference = "Writer Definitely Missing Terminal 8B112EE0";
-        let error = launch_terminal(dir.path(), preference, || Ok(())).unwrap_err();
+        let error = launch_terminal(dir.path(), preference, |command| {
+            Ok(command.spawn().map_err(|error| error.to_string()))
+        })
+        .unwrap_err();
         let message = error.to_string();
 
         assert!(message.contains(preference));
@@ -1153,6 +1217,47 @@ mod tests {
             validate_terminal_launch_snapshot(&state, &first_root, first_epoch).unwrap_err(),
             AppError::InvalidPath(_)
         ));
+    }
+
+    #[test]
+    fn guarded_launch_helpers_reject_stale_callbacks_and_hold_the_workspace_read_guard() {
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let first_root = first.path().canonicalize().unwrap();
+        let state = WorkspaceState::default();
+        let epoch = state.replace_workspace_root(first_root.clone());
+
+        let terminal_ran = std::cell::Cell::new(false);
+        with_terminal_launch_snapshot(&state, &first_root, epoch, None, &first_root, || {
+            terminal_ran.set(true);
+            assert!(state.workspace_root.try_write().is_none());
+            Ok(())
+        })
+        .unwrap();
+        assert!(terminal_ran.get());
+
+        state.replace_workspace_root(second.path().canonicalize().unwrap());
+        terminal_ran.set(false);
+        assert!(matches!(
+            with_terminal_launch_snapshot(&state, &first_root, epoch, None, &first_root, || {
+                terminal_ran.set(true);
+                Ok(())
+            },)
+            .unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+        assert!(!terminal_ran.get());
+
+        let file_manager_ran = std::cell::Cell::new(false);
+        assert!(matches!(
+            open_workspace_in_file_manager_for_snapshot(&state, &first_root, epoch, |_| {
+                file_manager_ran.set(true);
+                Ok(())
+            })
+            .unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+        assert!(!file_manager_ran.get());
     }
 
     #[cfg(target_os = "macos")]

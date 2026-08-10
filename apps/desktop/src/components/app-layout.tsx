@@ -4,23 +4,27 @@ import { EditorArea } from "./editor-area";
 import { EditorTabs } from "./editor-area/editor-tabs";
 import { SidebarToggleButton } from "./sidebar/sidebar-toggle-button";
 import { CompactFileLayout } from "./compact-file-layout";
+import { WelcomeScreen } from "./welcome";
 import { useSidebar } from "@/hooks/use-sidebar";
-import { useWorkspaceChromeMode } from "@/hooks/use-workspace";
+import { useWorkspaceChromeMode, useWorkspaceRoot } from "@/hooks/use-workspace";
+import { resolveAppView } from "@/lib/app-view";
 
 function clampSidebarWidth(width: number, maxSidebarWidth: number) {
   return Math.max(220, Math.min(maxSidebarWidth, Math.round(width)));
 }
 
 export function AppLayout() {
+  const root = useWorkspaceRoot();
   const chromeMode = useWorkspaceChromeMode();
-  if (chromeMode === "compact-file") {
+  const appView = resolveAppView(root, chromeMode);
+  if (appView === "compact-file") {
     return <CompactFileLayout />;
   }
 
-  return <WorkspaceLayout />;
+  return <WorkspaceLayout showWelcome={appView === "workspace-welcome"} />;
 }
 
-function WorkspaceLayout() {
+function WorkspaceLayout({ showWelcome }: { showWelcome: boolean }) {
   const { isSidebarCollapsed, sidebarWidth, setSidebarWidth } = useSidebar();
   const viewportWidth = typeof window === "undefined" ? 1200 : window.innerWidth;
   const maxSidebarWidth = Math.max(280, Math.min(420, Math.floor(viewportWidth * 0.35)));
@@ -114,10 +118,13 @@ function WorkspaceLayout() {
       <div
         data-tauri-drag-region
         className="absolute inset-x-0 top-0 z-30"
-        style={{ height: "var(--chrome-drag-height)" }}
+        style={{
+          height: "var(--chrome-drag-height)",
+          left: isSidebarCollapsed ? 0 : draftSidebarWidth,
+        }}
       />
       <div
-        className="pointer-events-auto absolute left-0 top-0 z-50 flex items-center"
+        className="pointer-events-none absolute left-0 top-0 z-50 flex items-center"
         style={{
           height: "calc(var(--chrome-control-height) + var(--chrome-control-padding) * 2)",
           padding: "var(--chrome-control-padding) 12px var(--chrome-control-padding) 92px",
@@ -125,18 +132,20 @@ function WorkspaceLayout() {
       >
         <SidebarToggleButton />
       </div>
-      <div
-        className="pointer-events-none absolute top-0 z-40"
-        style={{
-          left: tabChromeLeft,
-          right: 12,
-          transition: isSidebarDragging ? "none" : "left 140ms ease-out",
-        }}
-      >
-        <div className="pointer-events-auto">
-          <EditorTabs />
+      {!showWelcome && (
+        <div
+          className="pointer-events-none absolute top-0 z-40"
+          style={{
+            left: tabChromeLeft,
+            right: 12,
+            transition: isSidebarDragging ? "none" : "left 140ms ease-out",
+          }}
+        >
+          <div className="pointer-events-auto">
+            <EditorTabs />
+          </div>
         </div>
-      </div>
+      )}
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex min-h-0 flex-1">
           <div
@@ -161,7 +170,7 @@ function WorkspaceLayout() {
           )}
 
           <div className="relative min-w-0 flex-1 bg-bg">
-            <EditorArea />
+            {showWelcome ? <WelcomeScreen /> : <EditorArea />}
           </div>
         </div>
       </div>
