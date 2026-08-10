@@ -17,7 +17,7 @@ import {
   useSetCommandPaletteSearch,
 } from "@/hooks/use-command-palette";
 import { useSidebar } from "@/hooks/use-sidebar";
-import { useIsCompactFileMode, useWorkspace } from "@/hooks/use-workspace";
+import { useCloseWorkspace, useIsCompactFileMode, useWorkspace } from "@/hooks/use-workspace";
 import {
   useActiveFilePath,
   useActiveTabId,
@@ -67,7 +67,8 @@ export function CommandPalette() {
   const search = useCommandPaletteSearch();
   const setSearch = useSetCommandPaletteSearch();
   const { toggleSidebar } = useSidebar();
-  const { root, isIndexing, openWorkspace, closeWorkspace } = useWorkspace();
+  const { root, isIndexing, openWorkspace } = useWorkspace();
+  const closeWorkspace = useCloseWorkspace();
   const openFile = useOpenFile();
   const closeActiveTab = useCloseActiveTab();
   const closeTab = useCloseTab();

@@ -10,6 +10,7 @@ export type WorkspaceChromeMode = "workspace" | "compact-file";
 
 interface WorkspaceState {
   root: string | null;
+  workspaceEpoch: number | null;
   workspaceGeneration: number;
   chromeMode: WorkspaceChromeMode;
   fileCount: number;
@@ -25,7 +26,7 @@ interface WorkspaceState {
   /** Hydrate from a prefetched `RestoreWorkspaceResponse` (startup cold-path
    *  and user-initiated switches via the `restore_workspace` IPC). */
   restoreFromBundle: (bundle: RestoreWorkspaceResponse) => Promise<void>;
-  closeWorkspace: () => void;
+  closeWorkspace: () => Promise<void>;
   setChromeMode: (mode: WorkspaceChromeMode) => void;
   setStartupResolved: () => void;
   refreshDirectory: (path: string) => Promise<void>;
@@ -86,6 +87,7 @@ function withNextWorkspaceGeneration(
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   root: null,
+  workspaceEpoch: null,
   workspaceGeneration: 0,
   chromeMode: "workspace",
   fileCount: 0,
@@ -131,6 +133,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set((state) =>
       withNextWorkspaceGeneration(state, {
         root: info.root,
+        workspaceEpoch: info.epoch,
         chromeMode: "workspace",
         fileCount: info.file_count,
         isIndexing: true,
@@ -152,11 +155,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     useEditorStore.getState().ensureLauncherTab();
   },
 
-  closeWorkspace: () => {
+  closeWorkspace: async () => {
     const root = get().root;
     if (!root) return;
     const snapshot = getEditorSessionSnapshot(useEditorStore.getState());
     void saveSession(root, snapshot.tabs, snapshot.activeIndex);
+    await tauri.closeWorkspace(root);
+    if (get().root !== root) return;
     useEditorStore.setState({
       openFiles: new Map(),
       tabs: [],
@@ -166,6 +171,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set((state) =>
       withNextWorkspaceGeneration(state, {
         root: null,
+        workspaceEpoch: null,
         chromeMode: "workspace",
         fileCount: 0,
         directoryCache: new Map(),
@@ -189,6 +195,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set((state) =>
       withNextWorkspaceGeneration(state, {
         root: bundle.workspace.root,
+        workspaceEpoch: bundle.workspace.epoch,
         chromeMode: "workspace",
         fileCount: bundle.workspace.file_count,
         isIndexing: true,

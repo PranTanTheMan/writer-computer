@@ -503,17 +503,40 @@ pub async fn create_directory(path: String) -> Result<DirEntry, AppError> {
     blocking(move || create_directory_impl(&path)).await
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SidebarEntryKind {
-    File,
-    Folder,
+macro_rules! sidebar_entry_kinds {
+    ($( $variant:ident => $wire:literal ),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+        pub enum SidebarEntryKind {
+            $(#[serde(rename = $wire)] $variant),+
+        }
+
+        impl SidebarEntryKind {
+            #[cfg(test)]
+            const ALL: &'static [Self] = &[$(Self::$variant),+];
+        }
+    };
 }
 
-pub fn create_sidebar_entry_impl(
+sidebar_entry_kinds!(File => "file", Folder => "folder");
+
+fn create_sidebar_candidate(
+    candidate: &Path,
+    kind: SidebarEntryKind,
+) -> Result<DirEntry, AppError> {
+    match kind {
+        SidebarEntryKind::File => create_file_impl(&candidate.to_string_lossy()).and_then(|_| {
+            markdown_file_entry(candidate)
+                .ok_or_else(|| AppError::Io("Created Markdown file is unreadable".into()))
+        }),
+        SidebarEntryKind::Folder => create_directory_impl(&candidate.to_string_lossy()),
+    }
+}
+
+fn create_sidebar_entry_with(
     parent_path: &Path,
     workspace_root: &Path,
     kind: SidebarEntryKind,
+    mut create_candidate: impl FnMut(&Path, SidebarEntryKind) -> Result<DirEntry, AppError>,
 ) -> Result<DirEntry, AppError> {
     let root = workspace_root
         .canonicalize()
@@ -540,15 +563,7 @@ pub fn create_sidebar_entry_impl(
             SidebarEntryKind::File => parent.join(format!("{}.md", numbered("Untitled"))),
             SidebarEntryKind::Folder => parent.join(numbered("Untitled Folder")),
         };
-        let result = match kind {
-            SidebarEntryKind::File => {
-                create_file_impl(&candidate.to_string_lossy()).and_then(|_| {
-                    markdown_file_entry(&candidate)
-                        .ok_or_else(|| AppError::Io("Created Markdown file is unreadable".into()))
-                })
-            }
-            SidebarEntryKind::Folder => create_directory_impl(&candidate.to_string_lossy()),
-        };
+        let result = create_candidate(&candidate, kind);
         match result {
             Ok(entry) => return Ok(entry),
             Err(AppError::AlreadyExists(_)) => {
@@ -561,6 +576,54 @@ pub fn create_sidebar_entry_impl(
     }
 }
 
+#[cfg(test)]
+pub fn create_sidebar_entry_impl(
+    parent_path: &Path,
+    workspace_root: &Path,
+    kind: SidebarEntryKind,
+) -> Result<DirEntry, AppError> {
+    create_sidebar_entry_with(parent_path, workspace_root, kind, create_sidebar_candidate)
+}
+
+fn create_sidebar_entry_for_snapshot(
+    state: &WorkspaceState,
+    parent_path: &Path,
+    workspace_root: &Path,
+    workspace_epoch: u64,
+    kind: SidebarEntryKind,
+) -> Result<DirEntry, AppError> {
+    create_sidebar_entry_with(parent_path, workspace_root, kind, |candidate, kind| {
+        state
+            .with_workspace_snapshot(workspace_root, workspace_epoch, || {
+                let live_root = workspace_root
+                    .canonicalize()
+                    .map_err(|error| AppError::Io(error.to_string()))?;
+                if live_root != workspace_root {
+                    return Err(AppError::InvalidPath(
+                        "Workspace folder changed before the sidebar entry could be created".into(),
+                    ));
+                }
+                let live_parent = parent_path
+                    .canonicalize()
+                    .map_err(|_| AppError::NotFound(parent_path.to_string_lossy().into_owned()))?;
+                if !live_parent.is_dir() || !live_parent.starts_with(&live_root) {
+                    return Err(AppError::InvalidPath(
+                        parent_path.to_string_lossy().into_owned(),
+                    ));
+                }
+                let file_name = candidate.file_name().ok_or_else(|| {
+                    AppError::InvalidPath(candidate.to_string_lossy().into_owned())
+                })?;
+                create_sidebar_candidate(&live_parent.join(file_name), kind)
+            })
+            .ok_or_else(|| {
+                AppError::InvalidPath(
+                    "Workspace changed before the sidebar entry could be created".into(),
+                )
+            })?
+    })
+}
+
 #[tauri::command]
 pub async fn create_sidebar_entry(
     parent_path: String,
@@ -569,12 +632,11 @@ pub async fn create_sidebar_entry(
     app: tauri::AppHandle,
 ) -> Result<DirEntry, AppError> {
     let state = app.state::<AppState>().get_or_create(webview.label());
-    let root = state
-        .workspace_root
-        .read()
-        .clone()
-        .ok_or(AppError::NoWorkspace)?;
-    blocking(move || create_sidebar_entry_impl(Path::new(&parent_path), &root, kind)).await
+    let (root, epoch) = state.workspace_snapshot().ok_or(AppError::NoWorkspace)?;
+    blocking(move || {
+        create_sidebar_entry_for_snapshot(&state, Path::new(&parent_path), &root, epoch, kind)
+    })
+    .await
 }
 
 pub fn rename_entry_impl(old_path: &str, new_path: &str) -> Result<(), AppError> {
@@ -947,6 +1009,77 @@ mod tests {
             create_sidebar_entry_impl(outside.path(), workspace.path(), SidebarEntryKind::Folder);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn sidebar_entry_kind_serialization_matches_the_shared_contract() {
+        let contract: std::collections::HashMap<String, bool> =
+            serde_json::from_str(include_str!("../../../shared/sidebar-entry-kinds.json")).unwrap();
+        let serialized = SidebarEntryKind::ALL
+            .iter()
+            .copied()
+            .map(|kind| {
+                serde_json::to_value(kind)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(
+            serialized,
+            contract
+                .into_keys()
+                .collect::<std::collections::HashSet<_>>()
+        );
+    }
+
+    #[test]
+    fn create_sidebar_entry_rejects_stale_workspace_before_mutation() {
+        let workspace = TempDir::new().unwrap();
+        let replacement = TempDir::new().unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        let state = WorkspaceState::default();
+        let epoch = state.replace_workspace_root(root.clone());
+        state.replace_workspace_root(replacement.path().canonicalize().unwrap());
+
+        assert!(matches!(
+            create_sidebar_entry_for_snapshot(&state, &root, &root, epoch, SidebarEntryKind::File,)
+                .unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+        assert!(!root.join("Untitled.md").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_sidebar_entry_rejects_a_replaced_workspace_root() {
+        use std::os::unix::fs::symlink;
+
+        let parent = TempDir::new().unwrap();
+        let workspace_path = parent.path().join("workspace");
+        fs::create_dir(&workspace_path).unwrap();
+        let root = workspace_path.canonicalize().unwrap();
+        let state = WorkspaceState::default();
+        let epoch = state.replace_workspace_root(root.clone());
+
+        fs::rename(&workspace_path, parent.path().join("moved-workspace")).unwrap();
+        let outside = TempDir::new().unwrap();
+        symlink(outside.path(), &workspace_path).unwrap();
+
+        assert!(matches!(
+            create_sidebar_entry_for_snapshot(
+                &state,
+                &workspace_path,
+                &root,
+                epoch,
+                SidebarEntryKind::File,
+            )
+            .unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+        assert!(!outside.path().join("Untitled.md").exists());
     }
 
     #[test]

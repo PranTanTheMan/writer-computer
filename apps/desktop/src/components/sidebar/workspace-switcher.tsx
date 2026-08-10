@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { useWorkspace } from "@/hooks/use-workspace";
+import { useCloseWorkspace, useWorkspace } from "@/hooks/use-workspace";
 import * as tauri from "@/lib/tauri";
 import {
   showNativeContextMenu,
@@ -12,7 +12,8 @@ function getFolderName(path: string): string {
 }
 
 export function WorkspaceSwitcher() {
-  const { root, recentWorkspaces, openWorkspace, closeWorkspace } = useWorkspace();
+  const { root, recentWorkspaces, openWorkspace } = useWorkspace();
+  const closeWorkspace = useCloseWorkspace();
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   const workspaceName = root ? getFolderName(root) : "No Workspace";

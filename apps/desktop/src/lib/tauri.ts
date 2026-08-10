@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import sidebarEntryKinds from "@shared/sidebar-entry-kinds.json";
 import type {
   DirEntry,
   FileContent,
@@ -39,7 +40,7 @@ export function createDirectory(path: string): Promise<DirEntry> {
   return invoke("create_directory", { path });
 }
 
-export type SidebarEntryKind = "file" | "folder";
+export type SidebarEntryKind = keyof typeof sidebarEntryKinds;
 
 export function createSidebarEntry(parentPath: string, kind: SidebarEntryKind): Promise<DirEntry> {
   return invoke("create_sidebar_entry", { parentPath, kind });
@@ -70,6 +71,10 @@ export function revealInFileManager(path: string): Promise<void> {
 // Workspace commands
 export function openWorkspace(path: string): Promise<WorkspaceInfo> {
   return invoke("open_workspace", { path });
+}
+
+export function closeWorkspace(root: string): Promise<void> {
+  return invoke("close_workspace", { root });
 }
 
 export function openWorkspaceInFileManager(): Promise<void> {

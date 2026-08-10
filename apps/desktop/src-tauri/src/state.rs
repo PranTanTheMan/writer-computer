@@ -18,6 +18,7 @@ use std::time::Instant;
 pub struct WorkspaceState {
     pub workspace_root: RwLock<Option<PathBuf>>,
     pub file_index: RwLock<Vec<IndexedFile>>,
+    pub file_index_revision: AtomicU64,
     pub recent_files_cache: RwLock<Option<Vec<IndexedFile>>>,
     pub dirs_with_markdown: RwLock<HashSet<PathBuf>>,
     /// Set to `true` after the first full index completes.
@@ -74,11 +75,21 @@ pub struct IndexedFile {
     pub modified_at: u64,
 }
 
+pub type WorkspaceRuntimeDrop = (
+    Option<RecommendedWatcher>,
+    Vec<IndexedFile>,
+    Option<Vec<IndexedFile>>,
+    HashSet<PathBuf>,
+    HashMap<PathBuf, Instant>,
+    Option<Arc<WorkspaceIgnore>>,
+);
+
 impl Default for WorkspaceState {
     fn default() -> Self {
         Self {
             workspace_root: RwLock::new(None),
             file_index: RwLock::new(Vec::new()),
+            file_index_revision: AtomicU64::new(0),
             recent_files_cache: RwLock::new(None),
             dirs_with_markdown: RwLock::new(HashSet::new()),
             index_ready: AtomicBool::new(false),
@@ -97,9 +108,62 @@ impl Default for WorkspaceState {
 }
 
 impl WorkspaceState {
+    fn reset_workspace_runtime(&self) -> WorkspaceRuntimeDrop {
+        self.cancel_index.read().store(true, Ordering::SeqCst);
+        *self.standalone_file.write() = None;
+        let file_index = std::mem::take(&mut *self.file_index.write());
+        self.file_index_revision.fetch_add(1, Ordering::SeqCst);
+        let recent_cache = self.recent_files_cache.write().take();
+        let dirs = std::mem::take(&mut *self.dirs_with_markdown.write());
+        self.index_ready.store(false, Ordering::SeqCst);
+        let recent_writes = std::mem::take(&mut *self.recent_writes.write());
+        let ignore = self.workspace_ignore.write().take();
+        if let Some(settings) = self.settings.write().as_mut() {
+            settings.clear_workspace();
+        }
+        (
+            self.watcher_handle.write().take(),
+            file_index,
+            recent_cache,
+            dirs,
+            recent_writes,
+            ignore,
+        )
+    }
+
+    /// Transition to a workspace under the same root write guard used by
+    /// close. This is the single reset funnel for all workspace-owned runtime
+    /// state, so open and close cannot drift into different cleanup rules.
+    pub fn transition_to_workspace(
+        &self,
+        root: PathBuf,
+    ) -> (u64, Arc<AtomicBool>, WorkspaceRuntimeDrop) {
+        let workspace_loader = self
+            .settings
+            .read()
+            .as_ref()
+            .map(|settings| settings.workspace_loader());
+        let workspace_settings = workspace_loader.map(|loader| loader.read(&root));
+        let mut root_guard = self.workspace_root.write();
+        let old_watcher = self.reset_workspace_runtime();
+        let epoch = self.workspace_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        *root_guard = Some(root.clone());
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        *self.cancel_index.write() = Arc::clone(&cancel);
+        *self.workspace_ignore.write() = Some(Arc::new(WorkspaceIgnore::bootstrap()));
+        if let (Some(settings), Some(layer)) = (self.settings.write().as_mut(), workspace_settings)
+        {
+            settings.install_workspace_layer(layer);
+        }
+
+        (epoch, cancel, old_watcher)
+    }
+
     /// Atomically publish a workspace root together with its new epoch.
     /// Readers that need both values must use [`Self::workspace_snapshot`]
     /// so they cannot observe a new epoch paired with the outgoing root.
+    #[cfg(test)]
     pub fn replace_workspace_root(&self, root: PathBuf) -> u64 {
         let mut root_guard = self.workspace_root.write();
         let epoch = self.workspace_epoch.fetch_add(1, Ordering::SeqCst) + 1;
@@ -111,6 +175,41 @@ impl WorkspaceState {
         let root_guard = self.workspace_root.read();
         let epoch = self.workspace_epoch.load(Ordering::SeqCst);
         root_guard.clone().map(|root| (root, epoch))
+    }
+
+    /// Run one immediate workspace-bound side effect only while a captured
+    /// root/epoch pair is still current. The root read guard remains held for
+    /// the callback, preventing a workspace switch from being published
+    /// between final validation and the side effect itself.
+    pub fn with_workspace_snapshot<T>(
+        &self,
+        captured_root: &Path,
+        captured_epoch: u64,
+        f: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let root_guard = self.workspace_root.read();
+        let epoch = self.workspace_epoch.load(Ordering::SeqCst);
+        if root_guard.as_deref() != Some(captured_root) || epoch != captured_epoch {
+            return None;
+        }
+        Some(f())
+    }
+
+    /// Atomically invalidate and clear the currently hosted workspace. The
+    /// root write guard stays held while workspace-owned state is reset so a
+    /// concurrent open cannot publish its new root before cleanup finishes.
+    pub fn clear_workspace_if_current(
+        &self,
+        expected_root: &Path,
+    ) -> Result<WorkspaceRuntimeDrop, ()> {
+        let mut root_guard = self.workspace_root.write();
+        if root_guard.as_deref() != Some(expected_root) {
+            return Err(());
+        }
+
+        self.workspace_epoch.fetch_add(1, Ordering::SeqCst);
+        *root_guard = None;
+        Ok(self.reset_workspace_runtime())
     }
 
     pub fn set_startup_open(&self, payload: PendingOpenPayload) {
@@ -182,6 +281,7 @@ impl WorkspaceState {
                 if file.modified_at != modified_at {
                     file.modified_at = modified_at;
                     changed = true;
+                    self.file_index_revision.fetch_add(1, Ordering::SeqCst);
                 }
             }
         }
@@ -225,6 +325,10 @@ impl WorkspaceState {
 /// `commands::workspace::open_workspace_in_new_window`.
 pub struct AppState {
     windows: RwLock<HashMap<String, Arc<WorkspaceState>>>,
+    /// Serializes initialization, migrations, and read-modify-write mutations
+    /// of the global config shared by every window. Lock order is this mutex
+    /// first, then an individual window's `settings` lock.
+    pub global_settings_file_lock: Mutex<()>,
     /// Serializes read-modify-write on the shared `sessions.json` file so
     /// two windows can't clobber each other's tab state under the 500 ms
     /// debounce. Held only for the load→save span.
@@ -239,6 +343,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             windows: RwLock::new(HashMap::new()),
+            global_settings_file_lock: Mutex::new(()),
             sessions_file_lock: Mutex::new(()),
             recent_files_lock: Mutex::new(()),
         }
@@ -497,5 +602,72 @@ mod tests {
             Err(second)
         );
         assert_eq!(window_state.take_startup_open(), Some(first));
+    }
+
+    #[test]
+    fn guarded_workspace_snapshot_rejects_stale_callbacks_and_holds_read_guard() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let state = WorkspaceState::default();
+        let first_root = first.path().canonicalize().unwrap();
+        let first_epoch = state.replace_workspace_root(first_root.clone());
+
+        let ran = std::cell::Cell::new(false);
+        let result = state.with_workspace_snapshot(&first_root, first_epoch, || {
+            ran.set(true);
+            assert!(state.workspace_root.try_write().is_none());
+            42
+        });
+        assert_eq!(result, Some(42));
+        assert!(ran.get());
+
+        state.replace_workspace_root(second.path().canonicalize().unwrap());
+        ran.set(false);
+        assert_eq!(
+            state.with_workspace_snapshot(&first_root, first_epoch, || ran.set(true)),
+            None
+        );
+        assert!(!ran.get());
+
+        state.replace_workspace_root(first_root.clone());
+        assert_eq!(
+            state.with_workspace_snapshot(&first_root, first_epoch, || ran.set(true)),
+            None
+        );
+        assert!(!ran.get());
+    }
+
+    #[test]
+    fn close_workspace_invalidates_the_snapshot_and_rejects_stale_roots() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let first_root = first.path().canonicalize().unwrap();
+        let second_root = second.path().canonicalize().unwrap();
+        let state = WorkspaceState::default();
+        let (first_epoch, _, _) = state.transition_to_workspace(first_root.clone());
+        state.dirs_with_markdown.write().insert(first_root.clone());
+        state.index_ready.store(true, Ordering::SeqCst);
+        state
+            .recent_writes
+            .write()
+            .insert(first_root.join("old.md"), Instant::now());
+
+        state.clear_workspace_if_current(&first_root).unwrap();
+        assert!(state.workspace_snapshot().is_none());
+        assert!(state.dirs_with_markdown.read().is_empty());
+        assert!(!state.index_ready.load(Ordering::SeqCst));
+        assert!(state.recent_writes.read().is_empty());
+        assert!(state.workspace_ignore.read().is_none());
+        assert!(state
+            .with_workspace_snapshot(&first_root, first_epoch, || ())
+            .is_none());
+
+        state.transition_to_workspace(second_root.clone());
+        assert!(state.workspace_ignore.read().is_some());
+        assert!(state.clear_workspace_if_current(&first_root).is_err());
+        assert_eq!(
+            state.workspace_snapshot().map(|(root, _)| root),
+            Some(second_root)
+        );
     }
 }

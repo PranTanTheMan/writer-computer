@@ -30,33 +30,29 @@ pub fn index_workspace(
     app: tauri::AppHandle,
 ) -> Result<IndexStats, AppError> {
     let state = app.state::<AppState>().get_or_create(webview.label());
-    let root = state
-        .workspace_root
-        .read()
-        .clone()
-        .ok_or(AppError::NoWorkspace)?;
+    let (root, epoch) = state.workspace_snapshot().ok_or(AppError::NoWorkspace)?;
     let cancel = Arc::clone(&state.cancel_index.read());
-    // Capture the epoch before the (potentially multi-second) walk. If the
-    // user switches workspaces while we run, the epoch advances and we drop
-    // our results on the floor rather than overwriting the new workspace.
-    let epoch = state.workspace_epoch.load(Ordering::SeqCst);
 
     let start = std::time::Instant::now();
     let (indexed, dirs) = index_workspace_impl(&root, cancel);
     let file_count = indexed.len();
     let duration_ms = start.elapsed().as_millis() as u64;
 
-    if state.workspace_epoch.load(Ordering::SeqCst) != epoch {
+    let displaced = state.with_workspace_snapshot(&root, epoch, || {
+        let old_index = std::mem::replace(&mut *state.file_index.write(), indexed);
+        let old_cache = state.recent_files_cache.write().take();
+        let old_dirs = std::mem::replace(&mut *state.dirs_with_markdown.write(), dirs);
+        state.file_index_revision.fetch_add(1, Ordering::SeqCst);
+        state.index_ready.store(true, Ordering::Relaxed);
+        (old_index, old_cache, old_dirs)
+    });
+    let Some(displaced) = displaced else {
         return Ok(IndexStats {
             file_count: 0,
             duration_ms,
         });
-    }
-
-    *state.file_index.write() = indexed;
-    state.invalidate_recent_files_cache();
-    *state.dirs_with_markdown.write() = dirs;
-    state.index_ready.store(true, Ordering::Relaxed);
+    };
+    drop(displaced);
 
     Ok(IndexStats {
         file_count,

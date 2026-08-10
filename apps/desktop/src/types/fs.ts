@@ -22,6 +22,7 @@ export interface WorkspaceInfo {
   root: string;
   name: string;
   file_count: number;
+  epoch: number;
 }
 
 export interface SearchResult {

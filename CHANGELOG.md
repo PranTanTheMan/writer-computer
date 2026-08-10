@@ -2,6 +2,7 @@
 
 ## 2026-08-10
 
+- Make the sidebar background menu available across the full non-row surface, including the top drag gap, bottom workspace-switcher padding, and the no-workspace welcome shell. Workspace creation and external launch actions now abort safely during a workspace switch, and settings saved from an older window preserve newer global preferences from other windows.
 - Add a global **Default Terminal** preference under Workspace. Leave it blank for Writer's platform default, or enter a macOS application name / Windows or Linux executable to choose what the sidebar's **Open in Terminal** action launches. Values are trimmed, passed without shell interpretation, and invalid custom choices explain how to reset the preference.
 - Add **Open in Terminal** to folder row context menus so the selected directory opens in the configured terminal, with workspace containment and stale-path validation before launch.
 

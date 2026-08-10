@@ -114,7 +114,7 @@ pub(crate) fn open_new_workspace_window(
 
     let label = format!("w-{}", uuid::Uuid::new_v4().simple());
     let state = app.state::<AppState>().get_or_create(&label);
-    init_window_settings(app, &state);
+    init_window_settings(app, &state)?;
     state.set_startup_open(PendingOpenPayload {
         workspace: Some(workspace_str),
         file,
@@ -150,7 +150,7 @@ pub(crate) fn open_standalone_file_window(
 
     let label = format!("w-{}", uuid::Uuid::new_v4().simple());
     let state = app.state::<AppState>().get_or_create(&label);
-    init_window_settings(app, &state);
+    init_window_settings(app, &state)?;
     state.set_startup_open(PendingOpenPayload {
         workspace: None,
         file: Some(file.to_string_lossy().to_string()),
@@ -493,7 +493,7 @@ pub fn run() {
             // pending-open queue). `get_or_create` lazily builds the
             // `WorkspaceState` for the `"main"` label.
             let main_state = app.state::<AppState>().get_or_create(MAIN_WINDOW_LABEL);
-            init_window_settings(app.handle(), &main_state);
+            init_window_settings(app.handle(), &main_state)?;
 
             // On macOS, `open -a Writer /path` delivers the path via
             // RunEvent::Opened, not argv. On Linux/Windows the path
@@ -553,6 +553,7 @@ pub fn run() {
             commands::fs::reveal_in_file_manager,
             commands::workspace::open_workspace,
             commands::workspace::open_workspace_in_file_manager,
+            commands::workspace::close_workspace,
             commands::workspace::open_workspace_in_terminal,
             commands::workspace::open_workspace_in_new_window,
             commands::workspace::restore_workspace,

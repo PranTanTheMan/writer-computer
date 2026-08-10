@@ -62,13 +62,15 @@ async function footerMetricLabels() {
 
 describe("status bar and sidebar visibility settings", function () {
   before(async function () {
-    const workspaceRestored = await $('button[aria-label="Hide sidebar"]')
+    const workspaceRestored = await $('[data-sidebar-surface][data-workspace-open="true"]')
       .waitForExist({ timeout: 3_000 })
       .catch(() => false);
     if (!workspaceRestored) {
       await invoke("open_workspace", { path: E2E_WORKSPACE });
+      await browser.refresh();
     }
     await waitForMount();
+    await $('[data-sidebar-surface][data-workspace-open="true"]').waitForExist({ timeout: 15_000 });
     await resetVisibilitySettings();
     await browser.refresh();
     await waitForMount();
@@ -112,6 +114,29 @@ describe("status bar and sidebar visibility settings", function () {
     await browser.refresh();
     await waitForMount();
     strictEqual(await $("[data-sidebar-search-button]").isExisting(), false);
+  });
+
+  it("keeps top, content, and bottom sidebar zones on the surface hit path", async function () {
+    const hitPaths = await browser.execute(() => {
+      const surface = document.querySelector("[data-sidebar-surface]");
+      if (!(surface instanceof HTMLElement)) return null;
+      const surfaceRect = surface.getBoundingClientRect();
+      const zones = [
+        document.querySelector("[data-sidebar-surface-top]"),
+        document.querySelector("[data-sidebar-surface-content]"),
+        document.querySelector("[data-sidebar-surface-bottom]"),
+      ];
+      return zones.map((zone) => {
+        if (!(zone instanceof HTMLElement)) return false;
+        const rect = zone.getBoundingClientRect();
+        const x = Math.min(surfaceRect.right - 8, rect.left + Math.max(8, rect.width / 4));
+        const y = rect.top + Math.max(1, Math.min(rect.height - 1, rect.height / 2));
+        const hit = document.elementFromPoint(x, y);
+        return hit?.closest("[data-sidebar-surface]") === surface;
+      });
+    });
+
+    strictEqual(JSON.stringify(hitPaths), JSON.stringify([true, true, true]));
   });
 
   it("renders visibility toggles and the Default Terminal preference", async function () {

@@ -21,7 +21,7 @@ export function WelcomeScreen() {
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-bg text-text-primary">
+    <div className="flex h-full items-center justify-center bg-bg text-text-primary">
       <div className="w-full max-w-[300px] px-6">
         <p className="mb-6 text-center text-[13px] leading-relaxed text-text-muted">
           Add a folder with your specs, docs, notes, or any markdown files.

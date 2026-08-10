@@ -41,7 +41,7 @@ describe("LaTeX math rendering", function () {
   }
 
   before(async function () {
-    workspaceRestored = await $('button[aria-label="Hide sidebar"]')
+    workspaceRestored = await $('[data-sidebar-surface][data-workspace-open="true"]')
       .waitForExist({ timeout: 15_000 })
       .catch(() => false);
     if (!workspaceRestored) return;
