@@ -76,8 +76,8 @@ export function openWorkspaceInFileManager(): Promise<void> {
   return invoke("open_workspace_in_file_manager");
 }
 
-export function openWorkspaceInTerminal(): Promise<void> {
-  return invoke("open_workspace_in_terminal");
+export function openDirectoryInTerminal(path: string | null): Promise<void> {
+  return invoke("open_workspace_in_terminal", { path });
 }
 
 /** Open a new in-process window for the given workspace. Each window owns

@@ -15,6 +15,7 @@ import { showFileContextMenu } from "./file-context-menu";
 import { showFolderContextMenu } from "./folder-context-menu";
 import { showBulkContextMenu } from "./bulk-context-menu";
 import { createSidebarEntryAndRename } from "./create-sidebar-entry-and-rename";
+import { createFolderTerminalAction } from "./sidebar-terminal-action";
 import type { DirEntry } from "@/types/fs";
 
 interface UseFileTreeContextMenusArgs {
@@ -166,6 +167,7 @@ export function useFileTreeContextMenus({
         onCopyAbsolutePath: () => {
           void writeText(entry.path);
         },
+        onOpenInTerminal: createFolderTerminalAction(entry),
         onReveal: () => {
           void tauri.revealInFileManager(entry.path).catch((error: unknown) => {
             window.alert(

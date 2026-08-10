@@ -6,6 +6,7 @@
 
 ## Done
 
+- Folder-row Open in Terminal: [`SPECs/sidebar-empty-area-context-menu-spec.md`](SPECs/sidebar-empty-area-context-menu-spec.md) — add an Open in Terminal action to folder row context menus, launching the selected in-workspace directory with the configured terminal.
 - Configurable default terminal: [`SPECs/configurable-default-terminal-spec.md`](SPECs/configurable-default-terminal-spec.md) — add a global Workspace preference for the terminal app/executable used by the sidebar's Open in Terminal action, preserving the platform default when unset.
 - Sidebar empty-area workspace actions: [`SPECs/sidebar-empty-area-context-menu-spec.md`](SPECs/sidebar-empty-area-context-menu-spec.md) — right-click sidebar gaps and section headers to create a root file/folder, open the workspace in Terminal or Finder, and retain the existing Search/Recents visibility toggles.
 - Status bar + sidebar visibility toggles: [`SPECs/statusbar-sidebar-visibility-spec.md`](SPECs/statusbar-sidebar-visibility-spec.md) — hide/show each footer metric (words, characters, paragraphs) and the sidebar Search button and Recents section, via five new boolean settings and native right-click check-item menus on the footer and sidebar surface.

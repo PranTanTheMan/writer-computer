@@ -132,10 +132,18 @@ describe("workspace IPC wrappers", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("open_workspace_in_file_manager");
   });
 
-  test("opens the current window workspace in a terminal", async () => {
+  test("opens the current window workspace root in a terminal", async () => {
     mockedInvoke.mockResolvedValue(undefined);
-    await ipc.openWorkspaceInTerminal();
-    expect(mockedInvoke).toHaveBeenCalledWith("open_workspace_in_terminal");
+    await ipc.openDirectoryInTerminal(null);
+    expect(mockedInvoke).toHaveBeenCalledWith("open_workspace_in_terminal", { path: null });
+  });
+
+  test("opens a selected workspace directory in a terminal", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+    await ipc.openDirectoryInTerminal("/ws/drafts");
+    expect(mockedInvoke).toHaveBeenCalledWith("open_workspace_in_terminal", {
+      path: "/ws/drafts",
+    });
   });
 
   test("pickWorkspace opens a directory dialog", async () => {

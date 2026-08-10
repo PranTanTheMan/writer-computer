@@ -11,6 +11,7 @@ import * as tauri from "@/lib/tauri";
 import { createSidebarEntryAndRename } from "./create-sidebar-entry-and-rename";
 import { SidebarNavigator } from "./sidebar-navigator";
 import { showSidebarSurfaceContextMenu } from "./sidebar-surface-context-menu";
+import { openSidebarDirectoryInTerminal } from "./sidebar-terminal-action";
 
 export function FileBrowser() {
   const openCommandPalette = useOpenCommandPalette();
@@ -56,8 +57,9 @@ export function FileBrowser() {
         ? {
             onNewFile: () => createRootEntry("file"),
             onNewFolder: () => createRootEntry("folder"),
-            onOpenInTerminal: () =>
-              runWorkspaceAction("Failed to open terminal", tauri.openWorkspaceInTerminal),
+            onOpenInTerminal: () => {
+              void openSidebarDirectoryInTerminal(null);
+            },
             onOpenInFileManager: () =>
               runWorkspaceAction(
                 "Failed to open workspace folder",

@@ -3,6 +3,7 @@
 ## 2026-08-10
 
 - Add a global **Default Terminal** preference under Workspace. Leave it blank for Writer's platform default, or enter a macOS application name / Windows or Linux executable to choose what the sidebar's **Open in Terminal** action launches. Values are trimmed, passed without shell interpretation, and invalid custom choices explain how to reset the preference.
+- Add **Open in Terminal** to folder row context menus so the selected directory opens in the configured terminal, with workspace containment and stale-path validation before launch.
 
 ## 2026-08-09
 

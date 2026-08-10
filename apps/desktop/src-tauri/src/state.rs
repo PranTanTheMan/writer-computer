@@ -97,6 +97,22 @@ impl Default for WorkspaceState {
 }
 
 impl WorkspaceState {
+    /// Atomically publish a workspace root together with its new epoch.
+    /// Readers that need both values must use [`Self::workspace_snapshot`]
+    /// so they cannot observe a new epoch paired with the outgoing root.
+    pub fn replace_workspace_root(&self, root: PathBuf) -> u64 {
+        let mut root_guard = self.workspace_root.write();
+        let epoch = self.workspace_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        *root_guard = Some(root);
+        epoch
+    }
+
+    pub fn workspace_snapshot(&self) -> Option<(PathBuf, u64)> {
+        let root_guard = self.workspace_root.read();
+        let epoch = self.workspace_epoch.load(Ordering::SeqCst);
+        root_guard.clone().map(|root| (root, epoch))
+    }
+
     pub fn set_startup_open(&self, payload: PendingOpenPayload) {
         debug_assert!(
             !self.startup_open_taken.load(Ordering::Acquire),

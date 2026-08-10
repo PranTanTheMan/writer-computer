@@ -147,6 +147,65 @@ fn validate_workspace_launch_root(path: &Path) -> Result<PathBuf, AppError> {
         .map_err(|error| AppError::Io(error.to_string()))
 }
 
+fn validate_terminal_target(
+    captured_root: &Path,
+    requested_path: Option<&Path>,
+) -> Result<PathBuf, AppError> {
+    let canonical_root = validate_workspace_launch_root(captured_root)?;
+    if canonical_root != captured_root {
+        return Err(AppError::InvalidPath(
+            captured_root.to_string_lossy().into_owned(),
+        ));
+    }
+
+    let requested_path = requested_path.unwrap_or(captured_root);
+    let target = validate_workspace_launch_root(requested_path)?;
+    if target != canonical_root && !target.starts_with(&canonical_root) {
+        return Err(AppError::InvalidPath(
+            requested_path.to_string_lossy().into_owned(),
+        ));
+    }
+    Ok(target)
+}
+
+fn validate_terminal_launch_snapshot(
+    state: &WorkspaceState,
+    captured_root: &Path,
+    captured_epoch: u64,
+) -> Result<(), AppError> {
+    let root_is_current = state.workspace_root.read().as_deref() == Some(captured_root);
+    if !root_is_current || !epoch_is_current(state, captured_epoch) {
+        return Err(AppError::InvalidPath(
+            "Workspace changed before the terminal could be opened".into(),
+        ));
+    }
+
+    let live_root = validate_workspace_launch_root(captured_root)?;
+    if live_root != captured_root {
+        return Err(AppError::InvalidPath(
+            "Workspace folder changed before the terminal could be opened".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_terminal_launch_boundary(
+    state: &WorkspaceState,
+    captured_root: &Path,
+    captured_epoch: u64,
+    requested_path: Option<&Path>,
+    captured_target: &Path,
+) -> Result<(), AppError> {
+    validate_terminal_launch_snapshot(state, captured_root, captured_epoch)?;
+    let live_target = validate_terminal_target(captured_root, requested_path)?;
+    if live_target != captured_target {
+        return Err(AppError::InvalidPath(
+            "Selected folder changed before the terminal could be opened".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn workspace_root_for_window(app: &tauri::AppHandle, label: &str) -> Result<PathBuf, AppError> {
     app.state::<AppState>()
         .get_or_create(label)
@@ -166,7 +225,11 @@ fn terminal_launch_error(preferred_terminal: Option<&str>, reason: &str) -> AppE
     }
 }
 
-fn launch_terminal(root: &Path, preferred_terminal: &str) -> Result<(), AppError> {
+fn launch_terminal(
+    root: &Path,
+    preferred_terminal: &str,
+    validate_before_launch: impl Fn() -> Result<(), AppError>,
+) -> Result<(), AppError> {
     let preferred_terminal = (!preferred_terminal.is_empty()).then_some(preferred_terminal);
     let terminal_env = std::env::var("TERMINAL").ok();
     let specs = terminal_launch_specs(
@@ -190,6 +253,7 @@ fn launch_terminal(root: &Path, preferred_terminal: &str) -> Result<(), AppError
         #[cfg(not(target_os = "windows"))]
         let _ = launch.new_console;
 
+        validate_before_launch()?;
         match launch.execution {
             TerminalExecution::Detached => match command.spawn() {
                 Ok(_) => return Ok(()),
@@ -235,15 +299,20 @@ pub async fn open_workspace_in_file_manager(
 
 #[tauri::command]
 pub async fn open_workspace_in_terminal(
+    path: Option<String>,
     webview: tauri::Webview,
     app: tauri::AppHandle,
 ) -> Result<(), AppError> {
-    let root = workspace_root_for_window(&app, webview.label())?;
+    let state = app.state::<AppState>().get_or_create(webview.label());
+    let (root, epoch) = state.workspace_snapshot().ok_or(AppError::NoWorkspace)?;
     let preferred_terminal =
         get_global_string_setting(&app, webview.label(), DEFAULT_TERMINAL_SETTING_KEY)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let root = validate_workspace_launch_root(&root)?;
-        launch_terminal(&root, &preferred_terminal)
+        let requested_path = path.as_deref().map(Path::new);
+        let target = validate_terminal_target(&root, requested_path)?;
+        launch_terminal(&target, &preferred_terminal, || {
+            validate_terminal_launch_boundary(&state, &root, epoch, requested_path, &target)
+        })
     })
     .await
     .map_err(|error| AppError::Io(error.to_string()))?
@@ -294,10 +363,10 @@ fn prepare_workspace_state(
 
     let state = app.state::<AppState>().get_or_create(label);
 
-    // Bump the epoch before any reset or background spawn. Every background
-    // task captured the prior value; anything still running against it will
-    // drop its results on the floor.
-    let new_epoch = state.workspace_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+    // Publish the new root and epoch under one lock. Every background task
+    // captured the prior epoch and will drop its results on the floor; launch
+    // commands cannot observe a new epoch paired with the outgoing root.
+    let new_epoch = state.replace_workspace_root(root.clone());
 
     // Signal the outgoing walker to quit, then install a fresh token for the
     // new workspace. The old `Arc<AtomicBool>` is still held by the in-flight
@@ -314,7 +383,6 @@ fn prepare_workspace_state(
     };
 
     // Reset per-workspace state.
-    *state.workspace_root.write() = Some(root.clone());
     *state.standalone_file.write() = None;
     *state.file_index.write() = Vec::new();
     state.invalidate_recent_files_cache();
@@ -919,7 +987,7 @@ mod tests {
     fn macos_invalid_terminal_app_surfaces_the_open_helper_failure() {
         let dir = TempDir::new().unwrap();
         let preference = "Writer Definitely Missing Terminal 8B112EE0";
-        let error = launch_terminal(dir.path(), preference).unwrap_err();
+        let error = launch_terminal(dir.path(), preference, || Ok(())).unwrap_err();
         let message = error.to_string();
 
         assert!(message.contains(preference));
@@ -940,6 +1008,150 @@ mod tests {
         assert!(matches!(
             validate_workspace_launch_root(&dir.path().join("missing")).unwrap_err(),
             AppError::NotFound(_)
+        ));
+    }
+
+    #[test]
+    fn terminal_target_validation_accepts_root_and_nested_directories() {
+        let workspace = TempDir::new().unwrap();
+        let nested = workspace.path().join("drafts").join("chapter one");
+        std::fs::create_dir_all(&nested).unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+
+        assert_eq!(validate_terminal_target(&root, None).unwrap(), root);
+        assert_eq!(
+            validate_terminal_target(&root, Some(&nested)).unwrap(),
+            nested.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn terminal_target_validation_rejects_files_missing_paths_and_siblings() {
+        let workspace = TempDir::new().unwrap();
+        let sibling = TempDir::new().unwrap();
+        let file = workspace.path().join("note.md");
+        std::fs::write(&file, "# Note").unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+
+        assert!(matches!(
+            validate_terminal_target(&root, Some(&file)).unwrap_err(),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            validate_terminal_target(&root, Some(&workspace.path().join("missing"))).unwrap_err(),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            validate_terminal_target(&root, Some(sibling.path())).unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_target_validation_accepts_internal_symlinks_and_rejects_external_ones() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = TempDir::new().unwrap();
+        let nested = workspace.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let internal_link = workspace.path().join("internal-link");
+        symlink(&nested, &internal_link).unwrap();
+
+        let outside = TempDir::new().unwrap();
+        let external_link = workspace.path().join("external-link");
+        symlink(outside.path(), &external_link).unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+
+        assert_eq!(
+            validate_terminal_target(&root, Some(&internal_link)).unwrap(),
+            nested.canonicalize().unwrap()
+        );
+        assert!(matches!(
+            validate_terminal_target(&root, Some(&external_link)).unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_target_validation_rejects_a_replaced_workspace_root() {
+        use std::os::unix::fs::symlink;
+
+        let parent = TempDir::new().unwrap();
+        let root_path = parent.path().join("workspace");
+        std::fs::create_dir(&root_path).unwrap();
+        let captured_root = root_path.canonicalize().unwrap();
+        std::fs::rename(&root_path, parent.path().join("moved-workspace")).unwrap();
+        let outside = TempDir::new().unwrap();
+        symlink(outside.path(), &root_path).unwrap();
+
+        assert!(matches!(
+            validate_terminal_target(&captured_root, None).unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_launch_boundary_rejects_delayed_target_and_root_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let parent = TempDir::new().unwrap();
+        let root_path = parent.path().join("workspace");
+        let selected_path = root_path.join("drafts");
+        std::fs::create_dir_all(&selected_path).unwrap();
+        let root = root_path.canonicalize().unwrap();
+        let target = validate_terminal_target(&root, Some(&selected_path)).unwrap();
+        let state = WorkspaceState::default();
+        let epoch = state.replace_workspace_root(root.clone());
+
+        let outside = TempDir::new().unwrap();
+        std::fs::rename(&selected_path, root_path.join("moved-drafts")).unwrap();
+        symlink(outside.path(), &selected_path).unwrap();
+        assert!(matches!(
+            validate_terminal_launch_boundary(&state, &root, epoch, Some(&selected_path), &target,)
+                .unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+
+        std::fs::remove_file(&selected_path).unwrap();
+        let root_target = validate_terminal_target(&root, None).unwrap();
+        std::fs::rename(&root_path, parent.path().join("moved-workspace")).unwrap();
+        symlink(outside.path(), &root_path).unwrap();
+        assert!(matches!(
+            validate_terminal_launch_boundary(&state, &root, epoch, None, &root_target)
+                .unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+    }
+
+    #[test]
+    fn terminal_launch_snapshot_rejects_workspace_switches_and_epoch_aba() {
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let first_root = first.path().canonicalize().unwrap();
+        let second_root = second.path().canonicalize().unwrap();
+        let state = WorkspaceState::default();
+        let first_epoch = state.replace_workspace_root(first_root.clone());
+        let (snapshotted_root, snapshotted_epoch) = state.workspace_snapshot().unwrap();
+        assert_eq!(
+            (snapshotted_root, snapshotted_epoch),
+            (first_root.clone(), first_epoch)
+        );
+
+        validate_terminal_launch_snapshot(&state, &first_root, first_epoch).unwrap();
+
+        state.replace_workspace_root(second_root);
+        assert!(matches!(
+            validate_terminal_launch_snapshot(&state, &first_root, first_epoch).unwrap_err(),
+            AppError::InvalidPath(_)
+        ));
+
+        state.replace_workspace_root(first_root.clone());
+        assert!(matches!(
+            validate_terminal_launch_snapshot(&state, &first_root, first_epoch).unwrap_err(),
+            AppError::InvalidPath(_)
         ));
     }
 

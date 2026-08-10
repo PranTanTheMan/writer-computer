@@ -61,3 +61,47 @@
 - `vp test`: 37 files / 536 tests passed after the final lifecycle changes.
 - `cargo test`: 131 tests passed. `cargo clippy` and `cargo fmt --check` passed; clippy reports only pre-existing warnings.
 - `vp run desktop#dev`: compiled, launched the Tauri app, and remained stable until intentionally stopped. Native menu selection and external Terminal/Finder launch were not automated; platform command construction and error paths are covered by focused tests.
+
+## Follow-up: Folder Row Open in Terminal
+
+### Baseline
+
+- Clean branch tracking the open PR branch.
+- `vp install`, `vp check`, and `vp test`: passed; 37 files / 540 tests, with the existing non-failing `wdio.conf.js` warning.
+- Rust: 136 tests passed; clippy completed with existing warnings; formatting passed.
+
+### Plan
+
+1. Extend the pure folder-menu spec with **Open in Terminal** immediately before Reveal in the same group, plus exact order and handler routing coverage.
+2. Keep one terminal IPC, adding an optional directory. Capture the invoking window's state/root/epoch; canonicalize off-thread; require the target to be the root or descendant; then revalidate the live root, epoch, and unchanged canonical root immediately before launch. Files, missing paths, siblings, replaced roots, external symlinks, A→B switches, and same-root/ABA reopen cycles are rejected; internal symlinks are accepted.
+3. Route both the sidebar surface and folder row through one testable frontend helper that forwards `null` or the selected `entry.path` and owns the exact `Failed to open terminal: …` alert prefix.
+4. Cover the pure folder-menu seam, selected-path/error helper, exact IPC null/path forwarding, and Rust target/snapshot validation, then run the full frontend/Rust gates and independent UX/QA plus Rust/architecture reviews.
+5. Update the changelog/task state, commit one follow-up change, and push it to the existing PR.
+
+### Risks / Edge Cases
+
+- A stale or malicious frontend path must not launch a terminal outside the invoking window's workspace.
+- Canonical containment must reject symlinks that resolve outside the workspace while accepting nested directories and the root itself.
+- Folder row errors should use the same neutral, actionable terminal failure message as the sidebar surface.
+- Native menu selection and actual terminal working directories require a manual desktop check; unit tests cover construction, routing, and rejection behavior without launching external apps.
+
+### Plan Review
+
+- UX/QA required explicit menu placement, a selected-row path wiring seam, and single-owned frontend error presentation. The revised plan places Terminal immediately before Reveal, introduces a shared helper, and tests exact path/error routing.
+- Rust/architecture required root plus epoch revalidation across the blocking boundary, including same-root ABA and replaced-root symlink cases. The revised plan captures per-window state/root/epoch and revalidates all three immediately before process creation.
+
+### Implementation Result
+
+- Added **Open in Terminal** immediately before Reveal in folder row menus and bound it to the selected `DirEntry.path` through a focused, testable action seam.
+- Routed root and folder actions through one frontend error owner and the existing terminal IPC, now with an explicit optional path argument.
+- Added atomic workspace root/epoch publication and snapshot methods. The backend canonicalizes the selected directory, rejects paths outside the invoking workspace, and revalidates live root, epoch, requested path, and canonical target immediately before every process attempt.
+- Covered missing/files/siblings, internal and external symlinks, root replacement, delayed target replacement, A→B switching, and same-root/ABA epochs.
+
+### Review and Validation
+
+- Independent UX/QA and Rust/architecture plan reviews passed after tightening menu order, wiring coverage, and stale-launch requirements.
+- Independent standards and spec implementation reviews passed after closing non-atomic root/epoch capture, delayed selected-target replacement, and folder-row wiring gaps.
+- `vp check`: passed with the existing non-failing `wdio.conf.js` warning.
+- `vp test`: 38 files / 545 tests passed.
+- Rust: 142 tests passed; `cargo clippy` and `cargo fmt --check` passed with only pre-existing warnings.
+- `vp run desktop#dev`: compiled, launched, and remained stable until intentionally stopped. Native menu selection and the external terminal working directory were not automated.
