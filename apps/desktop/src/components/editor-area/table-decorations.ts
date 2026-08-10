@@ -25,6 +25,12 @@ const tableCellLineHeight = 1.4;
 const tableCellVerticalPaddingEm = 1;
 const tableWidgetVerticalPaddingEm = 0.5;
 const tableBorderWidthPx = 1;
+// Ceiling on how much width a single column may demand, at roughly half the
+// editor measure. The auto table layout hands out width in proportion to each
+// column's max-content, so without a ceiling one long-prose column takes
+// nearly everything and its neighbours collapse toward their minimum. Capping
+// the demand lets the other columns keep their natural width instead.
+const tableCellMaxWidthCh = 48;
 
 function numericSettingDefault(key: string, fallback: number): number {
   const def = SETTINGS_SCHEMA.find((entry) => entry.key === key);
@@ -508,7 +514,20 @@ const tableTheme = EditorView.baseTheme({
   },
   ".cm-table-widget th, .cm-table-widget td": {
     padding: `${tableCellVerticalPaddingEm / 2}em 0.8em`,
-    minWidth: "6em",
+    maxWidth: `${tableCellMaxWidthCh}ch`,
+    // `EditorView.lineWrapping` applies `overflow-wrap: anywhere` (plus
+    // Safari's `word-break: break-word`) to `.cm-content`, and these cells
+    // inherit it. Unlike `break-word`, `anywhere` contributes its break
+    // opportunities to min-content sizing, so every column's minimum collapses
+    // to a single character and the auto table layout is free to squeeze a
+    // column until ordinary words shred mid-word. Resetting to `break-word`
+    // puts the column minimum back at "longest word": an overlong token still
+    // breaks, but only once it cannot fit on a line at all.
+    overflowWrap: "break-word",
+    wordBreak: "normal",
+    // Short cells sit against the first line of a tall wrapped row rather than
+    // floating in the middle of it.
+    verticalAlign: "top",
     fontSize: "inherit",
     lineHeight: `${tableCellLineHeight}`,
     borderBottom: `${tableBorderWidthPx}px solid var(--border-color, #3e3e42)`,
@@ -523,6 +542,10 @@ const tableTheme = EditorView.baseTheme({
   ".cm-table-widget th": {
     fontWeight: "600",
     backgroundColor: "var(--surface-subtle, var(--code-bg, #2d2d2d))",
+    // Headers match their left-aligned bodies instead of taking the browser's
+    // centered `th` default. An alignment parsed from the delimiter row is set
+    // as an inline style on the cell, so `:---:` / `---:` still win here.
+    textAlign: "left",
   },
   ".cm-table-source-line": {
     display: "block",
