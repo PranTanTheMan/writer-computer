@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { getWorkspaceChromeMode } from "@/lib/compact-mode";
 
@@ -7,7 +8,6 @@ export function useWorkspace() {
   const chromeMode = getWorkspaceChromeMode(root, rawChromeMode);
   const isIndexing = useWorkspaceStore((s) => s.isIndexing);
   const openWorkspace = useWorkspaceStore((s) => s.openWorkspace);
-  const closeWorkspace = useWorkspaceStore((s) => s.closeWorkspace);
   const recentWorkspaces = useWorkspaceStore((s) => s.recentWorkspaces);
   const removeRecentWorkspace = useWorkspaceStore((s) => s.removeRecentWorkspace);
   return {
@@ -15,7 +15,6 @@ export function useWorkspace() {
     chromeMode,
     isIndexing,
     openWorkspace,
-    closeWorkspace,
     recentWorkspaces,
     removeRecentWorkspace,
   };
@@ -37,4 +36,21 @@ export function useIsStartupResolved() {
 
 export function useWorkspaceRoot() {
   return useWorkspaceStore((s) => s.root);
+}
+
+export function useWorkspaceGeneration() {
+  return useWorkspaceStore((s) => s.workspaceGeneration);
+}
+
+/** Close feedback is owned here so every close-workspace entry point reports
+ * the same failure and callers cannot silently diverge. */
+export function useCloseWorkspace() {
+  const closeWorkspace = useWorkspaceStore((s) => s.closeWorkspace);
+  return useCallback(() => {
+    void closeWorkspace().catch((error: unknown) => {
+      window.alert(
+        `Failed to close workspace: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  }, [closeWorkspace]);
 }

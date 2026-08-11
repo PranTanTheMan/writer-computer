@@ -62,13 +62,15 @@ async function footerMetricLabels() {
 
 describe("status bar and sidebar visibility settings", function () {
   before(async function () {
-    const workspaceRestored = await $('button[aria-label="Hide sidebar"]')
+    const workspaceRestored = await $('[data-sidebar-surface][data-workspace-open="true"]')
       .waitForExist({ timeout: 3_000 })
       .catch(() => false);
     if (!workspaceRestored) {
       await invoke("open_workspace", { path: E2E_WORKSPACE });
+      await browser.refresh();
     }
     await waitForMount();
+    await $('[data-sidebar-surface][data-workspace-open="true"]').waitForExist({ timeout: 15_000 });
     await resetVisibilitySettings();
     await browser.refresh();
     await waitForMount();
@@ -114,7 +116,30 @@ describe("status bar and sidebar visibility settings", function () {
     strictEqual(await $("[data-sidebar-search-button]").isExisting(), false);
   });
 
-  it("renders all five toggles in Preferences", async function () {
+  it("keeps top, content, and bottom sidebar zones on the surface hit path", async function () {
+    const hitPaths = await browser.execute(() => {
+      const surface = document.querySelector("[data-sidebar-surface]");
+      if (!(surface instanceof HTMLElement)) return null;
+      const surfaceRect = surface.getBoundingClientRect();
+      const zones = [
+        document.querySelector("[data-sidebar-surface-top]"),
+        document.querySelector("[data-sidebar-surface-content]"),
+        document.querySelector("[data-sidebar-surface-bottom]"),
+      ];
+      return zones.map((zone) => {
+        if (!(zone instanceof HTMLElement)) return false;
+        const rect = zone.getBoundingClientRect();
+        const x = Math.min(surfaceRect.right - 8, rect.left + Math.max(8, rect.width / 4));
+        const y = rect.top + Math.max(1, Math.min(rect.height - 1, rect.height / 2));
+        const hit = document.elementFromPoint(x, y);
+        return hit?.closest("[data-sidebar-surface]") === surface;
+      });
+    });
+
+    strictEqual(JSON.stringify(hitPaths), JSON.stringify([true, true, true]));
+  });
+
+  it("renders visibility toggles and the Default Terminal preference", async function () {
     await browser.execute(() => {
       document.dispatchEvent(
         new KeyboardEvent("keydown", { key: "p", metaKey: true, bubbles: true, cancelable: true }),
@@ -126,14 +151,14 @@ describe("status bar and sidebar visibility settings", function () {
     await $("[data-settings-panel]").waitForExist({ timeout: 5_000 });
 
     const rows = await browser.execute(() => {
-      const labels = Array.from(
-        document.querySelectorAll("[data-settings-panel] section"),
-      ).flatMap((section) => {
-        const heading = section.querySelector("h2")?.textContent ?? "";
-        return Array.from(section.querySelectorAll("div.text-\\[13px\\].font-medium")).map(
-          (label) => `${heading}: ${label.textContent}`,
-        );
-      });
+      const labels = Array.from(document.querySelectorAll("[data-settings-panel] section")).flatMap(
+        (section) => {
+          const heading = section.querySelector("h2")?.textContent ?? "";
+          return Array.from(section.querySelectorAll("div.text-\\[13px\\].font-medium")).map(
+            (label) => `${heading}: ${label.textContent}`,
+          );
+        },
+      );
       return labels;
     });
     for (const expected of [
@@ -142,9 +167,15 @@ describe("status bar and sidebar visibility settings", function () {
       "Status Bar: Words",
       "Status Bar: Characters",
       "Status Bar: Paragraphs",
+      "Workspace: Default Terminal",
     ]) {
       ok(rows.includes(expected), `missing settings row "${expected}" in ${JSON.stringify(rows)}`);
     }
+    strictEqual(
+      await $('input[placeholder="Platform default"]').isExisting(),
+      true,
+      "missing Default Terminal input",
+    );
   });
 
   it("hides the Recents section when off", async function () {

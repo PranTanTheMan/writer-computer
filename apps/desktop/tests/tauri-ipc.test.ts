@@ -76,6 +76,20 @@ describe("filesystem IPC wrappers", () => {
     });
   });
 
+  test("createSidebarEntry calls the workspace-scoped command", async () => {
+    mockedInvoke.mockResolvedValue({
+      name: "Untitled.md",
+      path: "/ws/Untitled.md",
+      is_dir: false,
+      is_markdown: true,
+    });
+    await ipc.createSidebarEntry("/ws", "file");
+    expect(mockedInvoke).toHaveBeenCalledWith("create_sidebar_entry", {
+      parentPath: "/ws",
+      kind: "file",
+    });
+  });
+
   test("renameEntry calls correct command", async () => {
     mockedInvoke.mockResolvedValue(undefined);
     await ipc.renameEntry("/old.md", "/new.md");
@@ -104,11 +118,37 @@ describe("filesystem IPC wrappers", () => {
 });
 
 describe("workspace IPC wrappers", () => {
+  test("closeWorkspace invalidates the expected workspace root", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+    await ipc.closeWorkspace("/test");
+    expect(mockedInvoke).toHaveBeenCalledWith("close_workspace", { root: "/test" });
+  });
+
   test("openWorkspace calls correct command", async () => {
     mockedInvoke.mockResolvedValue({ root: "/ws", name: "ws", file_count: 0 });
     await ipc.openWorkspace("/ws");
     expect(mockedInvoke).toHaveBeenCalledWith("open_workspace", {
       path: "/ws",
+    });
+  });
+
+  test("opens the current window workspace in its file manager", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+    await ipc.openWorkspaceInFileManager();
+    expect(mockedInvoke).toHaveBeenCalledWith("open_workspace_in_file_manager");
+  });
+
+  test("opens the current window workspace root in a terminal", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+    await ipc.openDirectoryInTerminal(null);
+    expect(mockedInvoke).toHaveBeenCalledWith("open_workspace_in_terminal", { path: null });
+  });
+
+  test("opens a selected workspace directory in a terminal", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+    await ipc.openDirectoryInTerminal("/ws/drafts");
+    expect(mockedInvoke).toHaveBeenCalledWith("open_workspace_in_terminal", {
+      path: "/ws/drafts",
     });
   });
 

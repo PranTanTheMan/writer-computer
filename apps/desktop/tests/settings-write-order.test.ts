@@ -4,6 +4,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@/lib/theme", () => ({ applyTheme: vi.fn(), applyCssVarBindings: vi.fn() }));
 
 import { invoke } from "@tauri-apps/api/core";
+import { applyCssVarBindings, applyTheme } from "../src/lib/theme";
 import { useSettingsStore } from "../src/stores/settings-store";
 
 const mockedInvoke = vi.mocked(invoke);
@@ -30,8 +31,8 @@ describe("settings write ordering", () => {
   });
 
   test("serializes backend writes for the same key while updating UI optimistically", async () => {
-    const first = deferred<void>();
-    const second = deferred<void>();
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
     mockedInvoke.mockImplementation((command, args) => {
       if (command !== "set_setting") return Promise.resolve(null);
       const value = (args as { value: string }).value;
@@ -45,18 +46,57 @@ describe("settings write ordering", () => {
     expect(useSettingsStore.getState().settings["fonts.editor"]).toBe("Second, serif");
     expect(mockedInvoke).toHaveBeenCalledTimes(1);
 
-    first.resolve();
+    first.resolve("First, serif");
     await flushMicrotasks();
     expect(mockedInvoke).toHaveBeenCalledTimes(2);
 
-    second.resolve();
+    second.resolve("Second, serif");
     await Promise.all([firstWrite, secondWrite]);
     expect(useSettingsStore.getState().settings["fonts.editor"]).toBe("Second, serif");
   });
 
+  test("reconciles optimistic state to the canonical value returned by the backend", async () => {
+    const write = deferred<unknown>();
+    mockedInvoke.mockImplementation((command) => {
+      if (command === "set_setting") return write.promise;
+      return Promise.resolve(null);
+    });
+
+    const pending = useSettingsStore
+      .getState()
+      .setSetting("workspace.default-terminal", "  Ghostty  ");
+    expect(useSettingsStore.getState().settings["workspace.default-terminal"]).toBe("  Ghostty  ");
+
+    write.resolve("Ghostty");
+    await pending;
+    expect(useSettingsStore.getState().settings["workspace.default-terminal"]).toBe("Ghostty");
+  });
+
+  test("does not republish settings when the backend returns the optimistic value unchanged", async () => {
+    mockedInvoke.mockResolvedValue("Ghostty");
+
+    await useSettingsStore.getState().setSetting("workspace.default-terminal", "Ghostty");
+
+    expect(applyTheme).toHaveBeenCalledTimes(1);
+    expect(applyCssVarBindings).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not republish an unchanged list returned as a fresh IPC array", async () => {
+    useSettingsStore.setState({
+      settings: { "files.associations": ["md"] },
+      isLoaded: true,
+    });
+    mockedInvoke.mockResolvedValue(["md", "markdown"]);
+
+    await useSettingsStore.getState().setSetting("files.associations", ["md", "markdown"]);
+
+    expect(applyTheme).toHaveBeenCalledTimes(1);
+    expect(applyCssVarBindings).toHaveBeenCalledTimes(1);
+  });
+
   test("a stale failed write cannot roll back a newer optimistic value", async () => {
-    const first = deferred<void>();
-    const second = deferred<void>();
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
     mockedInvoke.mockImplementation((command, args) => {
       if (command !== "set_setting") return Promise.resolve(null);
       const value = (args as { value: string }).value;
@@ -74,14 +114,14 @@ describe("settings write ordering", () => {
     await flushMicrotasks();
     expect(useSettingsStore.getState().settings["fonts.editor"]).toBe("Second, serif");
 
-    second.resolve();
+    second.resolve("Second, serif");
     await Promise.all([firstWrite, secondWrite]);
     expect(useSettingsStore.getState().settings["fonts.editor"]).toBe("Second, serif");
   });
 
   test("the latest failed write rolls back to the last successfully persisted value", async () => {
-    const first = deferred<void>();
-    const second = deferred<void>();
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
     mockedInvoke.mockImplementation((command, args) => {
       if (command !== "set_setting") return Promise.resolve(null);
       const value = (args as { value: string }).value;
@@ -93,7 +133,7 @@ describe("settings write ordering", () => {
       .getState()
       .setSetting("fonts.editor", "Second, serif")
       .catch(() => {});
-    first.resolve();
+    first.resolve("First, serif");
     await firstWrite;
     await flushMicrotasks();
     second.reject(new Error("second failed"));
@@ -103,8 +143,8 @@ describe("settings write ordering", () => {
   });
 
   test("reset stays ordered behind pending writes and wins in both backend and UI", async () => {
-    const first = deferred<void>();
-    const second = deferred<void>();
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
     const reset = deferred<void>();
     mockedInvoke.mockImplementation((command, args) => {
       if (command === "set_setting") {
@@ -126,7 +166,7 @@ describe("settings write ordering", () => {
     expect(useSettingsStore.getState().settings["fonts.editor"]).toBe("Second, serif");
     expect(mockedInvoke.mock.calls.map(([command]) => command)).toEqual(["set_setting"]);
 
-    first.resolve();
+    first.resolve("First, serif");
     await firstWrite;
     await flushMicrotasks();
     expect(mockedInvoke.mock.calls.map(([command]) => command)).toEqual([
@@ -134,7 +174,7 @@ describe("settings write ordering", () => {
       "set_setting",
     ]);
 
-    second.resolve();
+    second.resolve("Second, serif");
     await secondWrite;
     await flushMicrotasks();
     expect(mockedInvoke.mock.calls.map(([command]) => command)).toEqual([

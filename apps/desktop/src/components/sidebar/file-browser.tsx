@@ -1,37 +1,28 @@
-import type { MouseEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Search01Icon } from "@hugeicons/core-free-icons";
 import { useOpenCommandPalette } from "@/hooks/use-command-palette";
-import { useBooleanSetting, useSetSetting } from "@/hooks/use-settings";
+import { useBooleanSetting } from "@/hooks/use-settings";
 import { ScrollFade } from "@/components/scroll-fade";
 import { SidebarNavigator } from "./sidebar-navigator";
-import { showSidebarSurfaceContextMenu } from "./sidebar-surface-context-menu";
 
-export function FileBrowser() {
+interface FileBrowserProps {
+  renamingPath: string | null;
+  onRenamingPathChange: (path: string | null) => void;
+  everythingCollapsed: boolean;
+  onEverythingCollapsedChange: (collapsed: boolean) => void;
+}
+
+export function FileBrowser({
+  renamingPath,
+  onRenamingPathChange,
+  everythingCollapsed,
+  onEverythingCollapsedChange,
+}: FileBrowserProps) {
   const openCommandPalette = useOpenCommandPalette();
-  const setSetting = useSetSetting();
   const showSearch = useBooleanSetting("appearance.sidebar-show-search");
-  const showRecents = useBooleanSetting("appearance.sidebar-show-recents");
-
-  // File and folder rows stop propagation from their own context menus, so
-  // this only fires for the sidebar surface: empty space, section headers,
-  // and the search button.
-  const handleSurfaceContextMenu = (event: MouseEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    void showSidebarSurfaceContextMenu({
-      showSearch,
-      showRecents,
-      onToggleSearch: (visible) => {
-        void setSetting("appearance.sidebar-show-search", visible);
-      },
-      onToggleRecents: (visible) => {
-        void setSetting("appearance.sidebar-show-recents", visible);
-      },
-    });
-  };
 
   return (
-    <div className="flex h-full min-h-0 flex-col px-3" onContextMenu={handleSurfaceContextMenu}>
+    <div className="flex h-full min-h-0 flex-col px-3">
       {showSearch && (
         <div
           className="flex items-center"
@@ -61,7 +52,12 @@ export function FileBrowser() {
       )}
 
       <ScrollFade className="min-h-0 flex-1 overflow-y-scroll scrollbar-none">
-        <SidebarNavigator />
+        <SidebarNavigator
+          renamingPath={renamingPath}
+          onRenamingPathChange={onRenamingPathChange}
+          everythingCollapsed={everythingCollapsed}
+          onEverythingCollapsedChange={onEverythingCollapsedChange}
+        />
       </ScrollFade>
     </div>
   );

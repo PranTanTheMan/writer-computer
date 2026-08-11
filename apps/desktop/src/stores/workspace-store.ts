@@ -10,6 +10,8 @@ export type WorkspaceChromeMode = "workspace" | "compact-file";
 
 interface WorkspaceState {
   root: string | null;
+  workspaceEpoch: number | null;
+  workspaceGeneration: number;
   chromeMode: WorkspaceChromeMode;
   fileCount: number;
   isIndexing: boolean;
@@ -24,7 +26,7 @@ interface WorkspaceState {
   /** Hydrate from a prefetched `RestoreWorkspaceResponse` (startup cold-path
    *  and user-initiated switches via the `restore_workspace` IPC). */
   restoreFromBundle: (bundle: RestoreWorkspaceResponse) => Promise<void>;
-  closeWorkspace: () => void;
+  closeWorkspace: () => Promise<void>;
   setChromeMode: (mode: WorkspaceChromeMode) => void;
   setStartupResolved: () => void;
   refreshDirectory: (path: string) => Promise<void>;
@@ -76,8 +78,17 @@ function dedupe(paths: string[]) {
   return [...new Set(paths)];
 }
 
+function withNextWorkspaceGeneration(
+  state: WorkspaceState,
+  next: Partial<WorkspaceState>,
+): Partial<WorkspaceState> {
+  return { ...next, workspaceGeneration: state.workspaceGeneration + 1 };
+}
+
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   root: null,
+  workspaceEpoch: null,
+  workspaceGeneration: 0,
   chromeMode: "workspace",
   fileCount: 0,
   isIndexing: false,
@@ -119,17 +130,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       tauri.readDirectory(info.root),
       tauri.getRecentWorkspaces(),
     ]);
-    set({
-      root: info.root,
-      chromeMode: "workspace",
-      fileCount: info.file_count,
-      isIndexing: true,
-      directoryCache: new Map([[info.root, entries]]),
-      expandedDirs: new Set(),
-      pinnedFiles: [],
-      sidebarMetadataVersion: 0,
-      recentWorkspaces: recents,
-    });
+    set((state) =>
+      withNextWorkspaceGeneration(state, {
+        root: info.root,
+        workspaceEpoch: info.epoch,
+        chromeMode: "workspace",
+        fileCount: info.file_count,
+        isIndexing: true,
+        directoryCache: new Map([[info.root, entries]]),
+        expandedDirs: new Set(),
+        pinnedFiles: [],
+        sidebarMetadataVersion: 0,
+        recentWorkspaces: recents,
+      }),
+    );
     void get().hydratePinnedFiles(info.root);
 
     const session = await loadSession(info.root);
@@ -141,27 +155,32 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     useEditorStore.getState().ensureLauncherTab();
   },
 
-  closeWorkspace: () => {
+  closeWorkspace: async () => {
     const root = get().root;
     if (!root) return;
     const snapshot = getEditorSessionSnapshot(useEditorStore.getState());
     void saveSession(root, snapshot.tabs, snapshot.activeIndex);
+    await tauri.closeWorkspace(root);
+    if (get().root !== root) return;
     useEditorStore.setState({
       openFiles: new Map(),
       tabs: [],
       activeTabId: null,
       activeFilePath: null,
     });
-    set({
-      root: null,
-      chromeMode: "workspace",
-      fileCount: 0,
-      directoryCache: new Map(),
-      expandedDirs: new Set(),
-      pinnedFiles: [],
-      sidebarMetadataVersion: 0,
-      isIndexing: false,
-    });
+    set((state) =>
+      withNextWorkspaceGeneration(state, {
+        root: null,
+        workspaceEpoch: null,
+        chromeMode: "workspace",
+        fileCount: 0,
+        directoryCache: new Map(),
+        expandedDirs: new Set(),
+        pinnedFiles: [],
+        sidebarMetadataVersion: 0,
+        isIndexing: false,
+      }),
+    );
   },
 
   restoreFromBundle: async (bundle) => {
@@ -173,17 +192,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       activeFilePath: null,
     });
 
-    set({
-      root: bundle.workspace.root,
-      chromeMode: "workspace",
-      fileCount: bundle.workspace.file_count,
-      isIndexing: true,
-      directoryCache: new Map([[bundle.workspace.root, bundle.entries]]),
-      expandedDirs: new Set(),
-      pinnedFiles: [],
-      sidebarMetadataVersion: 0,
-      recentWorkspaces: bundle.recent_workspaces,
-    });
+    set((state) =>
+      withNextWorkspaceGeneration(state, {
+        root: bundle.workspace.root,
+        workspaceEpoch: bundle.workspace.epoch,
+        chromeMode: "workspace",
+        fileCount: bundle.workspace.file_count,
+        isIndexing: true,
+        directoryCache: new Map([[bundle.workspace.root, bundle.entries]]),
+        expandedDirs: new Set(),
+        pinnedFiles: [],
+        sidebarMetadataVersion: 0,
+        recentWorkspaces: bundle.recent_workspaces,
+      }),
+    );
     void get().hydratePinnedFiles(bundle.workspace.root);
 
     if (bundle.session && bundle.session.tabs && bundle.session.tabs.length > 0) {
@@ -220,8 +242,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   setStartupResolved: () => set({ isStartupResolved: true }),
 
   refreshDirectory: async (path: string) => {
+    const { root, workspaceGeneration } = get();
     const entries = await tauri.readDirectory(path);
     set((state) => {
+      if (state.root !== root || state.workspaceGeneration !== workspaceGeneration) return state;
       const cache = new Map(state.directoryCache);
       cache.set(path, entries);
       return { directoryCache: cache };
@@ -229,7 +253,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   toggleDirectory: async (path: string) => {
-    const { expandedDirs, directoryCache } = get();
+    const { root, workspaceGeneration, expandedDirs, directoryCache } = get();
     const newExpanded = new Set(expandedDirs);
 
     if (newExpanded.has(path)) {
@@ -240,6 +264,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       if (!directoryCache.has(path)) {
         const entries = await tauri.readDirectory(path);
         set((state) => {
+          if (state.root !== root || state.workspaceGeneration !== workspaceGeneration)
+            return state;
           const cache = new Map(state.directoryCache);
           cache.set(path, entries);
           return { directoryCache: cache, expandedDirs: newExpanded };

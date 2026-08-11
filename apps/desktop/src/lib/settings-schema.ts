@@ -44,26 +44,24 @@ export type SettingsMap = {
 
 export type SettingKey = keyof SettingsMap;
 
-/** Runtime SettingDef shape exposed to the rest of the app. This is the
- *  generalized form (string-typed `type`, optional fields) — the JSON gives
- *  us tighter literal types via `RawEntry`, but consumers rarely need them.
- *  Mirrors `apps/desktop/src-tauri/src/config.rs::SettingDef`. */
-export interface SettingDef {
-  key: string;
-  label: string;
-  description: string;
-  category: string;
-  type: "string" | "number" | "boolean" | "enum" | "list" | "color" | "range" | "font";
-  options?: string[];
-  min?: number;
-  max?: number;
-  step?: number;
-  cssVar?: string;
-  cssFormat?: "px" | "raw";
-  default: unknown;
-}
+type SchemaField<Entry, Key extends PropertyKey> = Entry extends unknown
+  ? Key extends keyof Entry
+    ? Entry[Key]
+    : never
+  : never;
 
-export const SETTINGS_SCHEMA: SettingDef[] = schemaFile.settings as SettingDef[];
+type KeysOfUnion<Entry> = Entry extends unknown ? keyof Entry : never;
+
+/** Generalized consumer shape whose field names and values are derived from
+ *  the imported JSON contract. Optional properties remain convenient for
+ *  generic controls without a cast that can hide schema drift. */
+export type SettingDef = {
+  [Key in keyof RawEntry]: SchemaField<RawEntry, Key>;
+} & {
+  [Key in Exclude<KeysOfUnion<RawEntry>, keyof RawEntry>]?: SchemaField<RawEntry, Key>;
+};
+
+export const SETTINGS_SCHEMA: readonly SettingDef[] = schemaFile.settings;
 
 // ---------- Theme primaries ----------
 

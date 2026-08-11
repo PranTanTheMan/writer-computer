@@ -37,6 +37,8 @@ interface FileTreeProps {
   rootPath: string;
   openFile?: (path: string) => Promise<void>;
   enableContextMenus?: boolean;
+  renamingPath: string | null;
+  onRenamingPathChange: (path: string | null) => void;
 }
 
 function getExtension(name: string): string {
@@ -49,6 +51,8 @@ export function FileTree({
   rootPath,
   openFile: openFileOverride,
   enableContextMenus = true,
+  renamingPath,
+  onRenamingPathChange,
 }: FileTreeProps) {
   const directoryCache = useDirectoryCache();
   const expandedDirs = useExpandedDirs();
@@ -64,7 +68,6 @@ export function FileTree({
   const togglePinnedFile = useTogglePinnedFile();
   const workspaceRoot = useWorkspaceRoot();
   const fileLabelMode = useSetting("appearance.sidebar-file-label");
-  const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   // Anchor for shift range-select. Only read inside handlers, never rendered,
   // so a ref avoids re-renders that a useState would trigger on every change.
@@ -186,7 +189,7 @@ export function FileTree({
 
   const handleRenameSubmit = useCallback(
     async (entry: DirEntry, nextValue: string) => {
-      setRenamingPath(null);
+      onRenamingPathChange(null);
 
       const trimmed = nextValue.trim();
       if (!trimmed) return;
@@ -219,12 +222,12 @@ export function FileTree({
         window.alert(`Failed to rename: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
-    [applyPathChange],
+    [applyPathChange, onRenamingPathChange],
   );
 
   const handleRenameCancel = useCallback(() => {
-    setRenamingPath(null);
-  }, []);
+    onRenamingPathChange(null);
+  }, [onRenamingPathChange]);
 
   const { handleFileContextMenu, handleFolderContextMenu, handleBulkContextMenu } =
     useFileTreeContextMenus({
@@ -238,7 +241,7 @@ export function FileTree({
       toggleDirectory,
       refreshDirectory,
       invalidatePath,
-      setRenamingPath,
+      setRenamingPath: onRenamingPathChange,
       clearSelection,
     });
 

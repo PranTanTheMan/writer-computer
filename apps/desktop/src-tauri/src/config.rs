@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// A value parsed from a Ghostty-style config file.
@@ -74,7 +74,10 @@ fn parse_value(s: &str) -> ConfigValue {
 /// - Blank lines are ignored
 /// - Format: `key = value`
 /// - Repeated keys accumulate into a List
-pub fn parse_config(content: &str) -> HashMap<String, ConfigValue> {
+fn parse_config_with_defaults(
+    content: &str,
+    defaults: Option<&HashMap<String, ConfigValue>>,
+) -> HashMap<String, ConfigValue> {
     let mut map: HashMap<String, ConfigValue> = HashMap::new();
     let mut list_keys: HashMap<String, Vec<String>> = HashMap::new();
 
@@ -106,7 +109,15 @@ pub fn parse_config(content: &str) -> HashMap<String, ConfigValue> {
                 };
                 list_keys.insert(key, vec![first, value_str]);
             } else {
-                map.insert(key, parse_value(&value_str));
+                let value = if matches!(
+                    defaults.and_then(|values| values.get(&key)),
+                    Some(ConfigValue::String(_))
+                ) {
+                    ConfigValue::String(value_str)
+                } else {
+                    parse_value(&value_str)
+                };
+                map.insert(key, value);
             }
         }
     }
@@ -117,6 +128,11 @@ pub fn parse_config(content: &str) -> HashMap<String, ConfigValue> {
     }
 
     map
+}
+
+#[cfg(test)]
+pub fn parse_config(content: &str) -> HashMap<String, ConfigValue> {
+    parse_config_with_defaults(content, None)
 }
 
 /// Serialize a config map back to plain-text, preserving comments and
@@ -230,7 +246,23 @@ pub struct SettingDef {
     /// a px unit; `"raw"` (or omitted) uses the value as-is.
     #[serde(rename = "cssFormat", default, skip_serializing_if = "Option::is_none")]
     pub css_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalize: Option<SettingNormalization>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<SettingScope>,
     pub default: ConfigValue,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SettingNormalization {
+    Trim,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SettingScope {
+    Global,
 }
 
 #[derive(Debug, Deserialize)]
@@ -253,6 +285,8 @@ pub fn settings_schema() -> Vec<SettingDef> {
 /// Manages the three-layer settings: defaults → global → workspace.
 pub struct Settings {
     defaults: HashMap<String, ConfigValue>,
+    normalizers: HashMap<String, SettingNormalization>,
+    global_only: HashSet<String>,
     global: HashMap<String, ConfigValue>,
     workspace: HashMap<String, ConfigValue>,
     global_raw: String,
@@ -261,21 +295,55 @@ pub struct Settings {
     workspace_path: Option<PathBuf>,
 }
 
-impl Settings {
-    pub fn new(global_config_dir: PathBuf) -> Self {
-        let defaults = default_settings();
-        let global_path = global_config_dir.join("config");
+pub(crate) struct WorkspaceSettingsLayer {
+    values: HashMap<String, ConfigValue>,
+    raw: String,
+    path: PathBuf,
+}
 
-        let (global_raw, global) = if global_path.exists() {
-            let raw = std::fs::read_to_string(&global_path).unwrap_or_default();
-            let parsed = parse_config(&raw);
-            (raw, parsed)
+pub(crate) struct WorkspaceSettingsLoader {
+    defaults: HashMap<String, ConfigValue>,
+}
+
+impl WorkspaceSettingsLoader {
+    pub(crate) fn read(&self, workspace_root: &Path) -> WorkspaceSettingsLayer {
+        let path = workspace_root.join(".writer").join("config");
+        let (raw, values) = if path.exists() {
+            let raw = std::fs::read_to_string(&path).unwrap_or_default();
+            let values = parse_config_with_defaults(&raw, Some(&self.defaults));
+            (raw, values)
         } else {
             (String::new(), HashMap::new())
         };
+        WorkspaceSettingsLayer { values, raw, path }
+    }
+}
+
+impl Settings {
+    pub fn new(global_config_dir: PathBuf) -> std::io::Result<Self> {
+        let defaults = default_settings();
+        let schema = settings_schema();
+        let normalizers = schema
+            .iter()
+            .filter_map(|definition| {
+                definition
+                    .normalize
+                    .map(|normalize| (definition.key.clone(), normalize))
+            })
+            .collect::<HashMap<_, _>>();
+        let global_only = schema
+            .iter()
+            .filter(|definition| definition.scope == Some(SettingScope::Global))
+            .map(|definition| definition.key.clone())
+            .collect::<HashSet<_>>();
+        let global_path = global_config_dir.join("config");
+
+        let (global_raw, global) = Self::read_global(&global_path, &defaults)?;
 
         let mut settings = Self {
             defaults,
+            normalizers,
+            global_only,
             global,
             workspace: HashMap::new(),
             global_raw,
@@ -285,10 +353,26 @@ impl Settings {
         };
 
         // Migrate from old preferences.json if it exists and config doesn't
-        settings.migrate_from_preferences(&global_config_dir);
-        settings.migrate_theme_fonts();
+        settings.migrate_from_preferences(&global_config_dir)?;
+        settings.migrate_theme_fonts()?;
 
-        settings
+        Ok(settings)
+    }
+
+    fn read_global(
+        path: &Path,
+        defaults: &HashMap<String, ConfigValue>,
+    ) -> std::io::Result<(String, HashMap<String, ConfigValue>)> {
+        match std::fs::read_to_string(path) {
+            Ok(raw) => {
+                let parsed = parse_config_with_defaults(&raw, Some(defaults));
+                Ok((raw, parsed))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok((String::new(), HashMap::new()))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// One-time migration: font stacks used to be per-mode theme primaries
@@ -297,7 +381,7 @@ impl Settings {
     /// light value (dark as fallback) unless the new key is already set, then
     /// drop the old keys from the global config. Old keys are kept on a failed
     /// write so a later launch can retry.
-    fn migrate_theme_fonts(&mut self) {
+    fn migrate_theme_fonts(&mut self) -> std::io::Result<()> {
         const FONT_SLOTS: [(&str, &str, &str); 3] = [
             ("fonts.ui", "theme.light.ui-font", "theme.dark.ui-font"),
             (
@@ -321,57 +405,62 @@ impl Settings {
                 continue;
             };
             if !self.global.contains_key(new_key) {
-                if let Err(error) = self.set_global(new_key, value) {
-                    eprintln!("[config] failed to migrate {new_key}: {error}");
-                    continue;
-                }
+                self.set_global(new_key, value)?;
             }
             for old_key in [light_key, dark_key] {
                 if self.global.contains_key(old_key) {
-                    if let Err(error) = self.reset_global(old_key) {
-                        eprintln!("[config] failed to drop migrated {old_key}: {error}");
-                    }
+                    self.reset_global(old_key)?;
                 }
             }
         }
+        Ok(())
     }
 
     /// One-time migration: read theme from old `preferences.json` (tauri-plugin-store format)
     /// and write it into the new config file. Removes the old file after migration.
-    fn migrate_from_preferences(&mut self, app_data_dir: &Path) {
+    fn migrate_from_preferences(&mut self, app_data_dir: &Path) -> std::io::Result<()> {
         let prefs_path = app_data_dir.join("preferences.json");
-        if !prefs_path.exists() {
-            return;
-        }
         // Only migrate if the global config doesn't already have a theme set
         if self.global.contains_key("appearance.theme") {
             // Old file exists but we already have settings — just clean up
-            let _ = std::fs::remove_file(&prefs_path);
-            return;
+            return match std::fs::remove_file(&prefs_path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            };
         }
-        if let Ok(data) = std::fs::read_to_string(&prefs_path) {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
-                if let Some(theme) = json.get("theme").and_then(|v| v.as_str()) {
-                    let _ =
-                        self.set_global("appearance.theme", ConfigValue::String(theme.to_string()));
-                }
+        let data = match std::fs::read_to_string(&prefs_path) {
+            Ok(data) => data,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+            if let Some(theme) = json.get("theme").and_then(|v| v.as_str()) {
+                self.set_global("appearance.theme", ConfigValue::String(theme.to_string()))?;
             }
         }
-        let _ = std::fs::remove_file(&prefs_path);
+        std::fs::remove_file(&prefs_path)
     }
 
     /// Load workspace-level config from `{workspace_root}/.writer/config`.
+    #[cfg(test)]
     pub fn load_workspace(&mut self, workspace_root: &Path) {
-        let path = workspace_root.join(".writer").join("config");
-        if path.exists() {
-            let raw = std::fs::read_to_string(&path).unwrap_or_default();
-            self.workspace = parse_config(&raw);
-            self.workspace_raw = raw;
-        } else {
-            self.workspace = HashMap::new();
-            self.workspace_raw = String::new();
+        let layer = self.workspace_loader().read(workspace_root);
+        self.install_workspace_layer(layer);
+    }
+
+    /// Snapshot immutable parser inputs while the settings lock is held; the
+    /// returned loader performs filesystem I/O without retaining that lock.
+    pub(crate) fn workspace_loader(&self) -> WorkspaceSettingsLoader {
+        WorkspaceSettingsLoader {
+            defaults: self.defaults.clone(),
         }
-        self.workspace_path = Some(path);
+    }
+
+    pub(crate) fn install_workspace_layer(&mut self, layer: WorkspaceSettingsLayer) {
+        self.workspace = layer.values;
+        self.workspace_raw = layer.raw;
+        self.workspace_path = Some(layer.path);
     }
 
     /// Clear workspace-level settings.
@@ -383,10 +472,18 @@ impl Settings {
 
     /// Get the merged value for a key: workspace → global → default.
     pub fn get(&self, key: &str) -> Option<&ConfigValue> {
+        if self.global_only.contains(key) {
+            return self.get_global_or_default(key);
+        }
         self.workspace
             .get(key)
             .or_else(|| self.global.get(key))
             .or_else(|| self.defaults.get(key))
+    }
+
+    /// Get an app-level setting without allowing a workspace config override.
+    pub fn get_global_or_default(&self, key: &str) -> Option<&ConfigValue> {
+        self.global.get(key).or_else(|| self.defaults.get(key))
     }
 
     /// Get all merged settings as a flat map.
@@ -396,25 +493,38 @@ impl Settings {
             result.insert(k.clone(), v.clone());
         }
         for (k, v) in &self.workspace {
-            result.insert(k.clone(), v.clone());
+            if !self.global_only.contains(k) {
+                result.insert(k.clone(), v.clone());
+            }
         }
         result
     }
 
     /// Set a value at the global scope, writing to disk.
     pub fn set_global(&mut self, key: &str, value: ConfigValue) -> std::io::Result<()> {
-        self.global.insert(key.to_string(), value.clone());
-        let mut current = parse_config(&self.global_raw);
+        self.reload_global()?;
+        let value = self.normalize_value(key, value);
+        let mut current = parse_config_with_defaults(&self.global_raw, Some(&self.defaults));
         current.insert(key.to_string(), value);
-        self.global_raw = serialize_config(&current, &self.global_raw);
+        let next_raw = serialize_config(&current, &self.global_raw);
         if let Some(parent) = self.global_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&self.global_path, &self.global_raw)
+        std::fs::write(&self.global_path, &next_raw)?;
+        self.global = current;
+        self.global_raw = next_raw;
+        Ok(())
     }
 
     /// Set a value at the workspace scope, writing to disk.
     pub fn set_workspace(&mut self, key: &str, value: ConfigValue) -> std::io::Result<()> {
+        if self.global_only.contains(key) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("setting {key} is global-only"),
+            ));
+        }
+        let value = self.normalize_value(key, value);
         let ws_path = match &self.workspace_path {
             Some(p) => p.clone(),
             None => {
@@ -425,7 +535,7 @@ impl Settings {
             }
         };
         self.workspace.insert(key.to_string(), value.clone());
-        let mut current = parse_config(&self.workspace_raw);
+        let mut current = parse_config_with_defaults(&self.workspace_raw, Some(&self.defaults));
         current.insert(key.to_string(), value);
         self.workspace_raw = serialize_config(&current, &self.workspace_raw);
         if let Some(parent) = ws_path.parent() {
@@ -434,14 +544,28 @@ impl Settings {
         std::fs::write(&ws_path, &self.workspace_raw)
     }
 
+    fn normalize_value(&self, key: &str, value: ConfigValue) -> ConfigValue {
+        match (self.normalizers.get(key), value) {
+            (Some(SettingNormalization::Trim), ConfigValue::String(value)) => {
+                ConfigValue::String(value.trim().to_string())
+            }
+            (_, value) => value,
+        }
+    }
+
     /// Remove a key override from the global scope.
     pub fn reset_global(&mut self, key: &str) -> std::io::Result<()> {
-        self.global.remove(key);
-        self.global_raw = remove_key_from_config(key, &self.global_raw);
+        self.reload_global()?;
+        let mut current = parse_config_with_defaults(&self.global_raw, Some(&self.defaults));
+        current.remove(key);
+        let next_raw = remove_key_from_config(key, &self.global_raw);
         if let Some(parent) = self.global_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&self.global_path, &self.global_raw)
+        std::fs::write(&self.global_path, &next_raw)?;
+        self.global = current;
+        self.global_raw = next_raw;
+        Ok(())
     }
 
     /// Remove a key override from the workspace scope.
@@ -461,21 +585,11 @@ impl Settings {
     }
 
     /// Reload global config from disk.
-    pub fn reload_global(&mut self) {
-        if self.global_path.exists() {
-            self.global_raw = std::fs::read_to_string(&self.global_path).unwrap_or_default();
-            self.global = parse_config(&self.global_raw);
-        }
-    }
-
-    /// Reload workspace config from disk.
-    pub fn reload_workspace(&mut self) {
-        if let Some(ref path) = self.workspace_path {
-            if path.exists() {
-                self.workspace_raw = std::fs::read_to_string(path).unwrap_or_default();
-                self.workspace = parse_config(&self.workspace_raw);
-            }
-        }
+    pub fn reload_global(&mut self) -> std::io::Result<()> {
+        let (global_raw, global) = Self::read_global(&self.global_path, &self.defaults)?;
+        self.global_raw = global_raw;
+        self.global = global;
+        Ok(())
     }
 
     /// Path to the global config file.
@@ -590,7 +704,7 @@ mod tests {
     #[test]
     fn test_settings_merge_order() {
         let dir = tempfile::tempdir().unwrap();
-        let mut settings = Settings::new(dir.path().to_path_buf());
+        let mut settings = Settings::new(dir.path().to_path_buf()).unwrap();
 
         // Default
         assert_eq!(
@@ -619,7 +733,7 @@ mod tests {
         )
         .unwrap();
 
-        let settings = Settings::new(dir.path().to_path_buf());
+        let settings = Settings::new(dir.path().to_path_buf()).unwrap();
 
         // Light wins when both modes were customized; dark is the fallback.
         assert_eq!(
@@ -646,7 +760,7 @@ mod tests {
             "fonts.editor = Palatino, serif\ntheme.light.editor-font = Georgia, serif\n",
         )
         .unwrap();
-        let settings = Settings::new(dir.path().to_path_buf());
+        let settings = Settings::new(dir.path().to_path_buf()).unwrap();
         assert_eq!(
             settings.get("fonts.editor"),
             Some(&ConfigValue::String("Palatino, serif".into()))
@@ -657,7 +771,7 @@ mod tests {
     fn test_settings_workspace_override() {
         let dir = tempfile::tempdir().unwrap();
         let ws_dir = tempfile::tempdir().unwrap();
-        let mut settings = Settings::new(dir.path().to_path_buf());
+        let mut settings = Settings::new(dir.path().to_path_buf()).unwrap();
 
         settings
             .set_global("editor.font-size", ConfigValue::Number(18.0))
@@ -676,7 +790,7 @@ mod tests {
     #[test]
     fn test_settings_reset() {
         let dir = tempfile::tempdir().unwrap();
-        let mut settings = Settings::new(dir.path().to_path_buf());
+        let mut settings = Settings::new(dir.path().to_path_buf()).unwrap();
 
         settings
             .set_global("editor.font-size", ConfigValue::Number(18.0))
@@ -691,6 +805,178 @@ mod tests {
         assert_eq!(
             settings.get("editor.font-size"),
             Some(&ConfigValue::Number(16.0))
+        );
+    }
+
+    #[test]
+    fn stale_settings_instances_merge_global_writes_and_resets() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut first_window = Settings::new(dir.path().to_path_buf()).unwrap();
+        let mut second_window = Settings::new(dir.path().to_path_buf()).unwrap();
+
+        first_window
+            .set_global(
+                "workspace.default-terminal",
+                ConfigValue::String("Ghostty".into()),
+            )
+            .unwrap();
+        second_window
+            .set_global("appearance.sidebar-visible", ConfigValue::Bool(false))
+            .unwrap();
+
+        let after_write = Settings::new(dir.path().to_path_buf()).unwrap();
+        assert_eq!(
+            after_write.get("workspace.default-terminal"),
+            Some(&ConfigValue::String("Ghostty".into()))
+        );
+        assert_eq!(
+            after_write.get("appearance.sidebar-visible"),
+            Some(&ConfigValue::Bool(false))
+        );
+
+        second_window
+            .reset_global("appearance.sidebar-visible")
+            .unwrap();
+        let after_reset = Settings::new(dir.path().to_path_buf()).unwrap();
+        assert_eq!(
+            after_reset.get("workspace.default-terminal"),
+            Some(&ConfigValue::String("Ghostty".into()))
+        );
+    }
+
+    #[test]
+    fn reload_global_treats_missing_as_empty_and_preserves_memory_on_read_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = Settings::new(dir.path().to_path_buf()).unwrap();
+        settings
+            .set_global(
+                "workspace.default-terminal",
+                ConfigValue::String("Ghostty".into()),
+            )
+            .unwrap();
+
+        std::fs::remove_file(settings.global_path()).unwrap();
+        settings.reload_global().unwrap();
+        assert_eq!(
+            settings.get("workspace.default-terminal"),
+            Some(&ConfigValue::String(String::new()))
+        );
+
+        settings
+            .set_global(
+                "workspace.default-terminal",
+                ConfigValue::String("Ghostty".into()),
+            )
+            .unwrap();
+        std::fs::remove_file(settings.global_path()).unwrap();
+        std::fs::create_dir(settings.global_path()).unwrap();
+
+        assert!(settings.reload_global().is_err());
+        assert_eq!(
+            settings.get("workspace.default-terminal"),
+            Some(&ConfigValue::String("Ghostty".into()))
+        );
+        assert!(settings
+            .set_global("appearance.sidebar-visible", ConfigValue::Bool(false))
+            .is_err());
+        assert!(settings.global_path().is_dir());
+    }
+
+    #[test]
+    fn terminal_string_setting_preserves_lexical_value_across_reload_and_reset() {
+        for value in ["TRUE", "00123", "1e3"] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut settings = Settings::new(dir.path().to_path_buf()).unwrap();
+            settings
+                .set_global(
+                    "workspace.default-terminal",
+                    ConfigValue::String(value.into()),
+                )
+                .unwrap();
+
+            let mut reloaded = Settings::new(dir.path().to_path_buf()).unwrap();
+            assert_eq!(
+                reloaded.get("workspace.default-terminal"),
+                Some(&ConfigValue::String(value.into()))
+            );
+
+            reloaded.reset_global("workspace.default-terminal").unwrap();
+            let reset = Settings::new(dir.path().to_path_buf()).unwrap();
+            assert_eq!(
+                reset.get("workspace.default-terminal"),
+                Some(&ConfigValue::String(String::new()))
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_string_setting_trims_at_the_settings_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = Settings::new(dir.path().to_path_buf()).unwrap();
+
+        settings
+            .set_global(
+                "workspace.default-terminal",
+                ConfigValue::String("  Ghostty  ".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            settings.get("workspace.default-terminal"),
+            Some(&ConfigValue::String("Ghostty".into()))
+        );
+
+        settings
+            .set_global(
+                "workspace.default-terminal",
+                ConfigValue::String("   ".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            settings.get("workspace.default-terminal"),
+            Some(&ConfigValue::String(String::new()))
+        );
+    }
+
+    #[test]
+    fn global_setting_lookup_ignores_workspace_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut settings = Settings::new(dir.path().to_path_buf()).unwrap();
+        settings
+            .set_global(
+                "workspace.default-terminal",
+                ConfigValue::String("Ghostty".into()),
+            )
+            .unwrap();
+        std::fs::create_dir_all(workspace.path().join(".writer")).unwrap();
+        std::fs::write(
+            workspace.path().join(".writer/config"),
+            "workspace.default-terminal = OtherTerminal\n",
+        )
+        .unwrap();
+        settings.load_workspace(workspace.path());
+
+        assert_eq!(
+            settings.get_global_or_default("workspace.default-terminal"),
+            Some(&ConfigValue::String("Ghostty".into()))
+        );
+        assert_eq!(
+            settings
+                .set_workspace(
+                    "workspace.default-terminal",
+                    ConfigValue::String("OtherTerminal".into()),
+                )
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            settings.get("workspace.default-terminal"),
+            Some(&ConfigValue::String("Ghostty".into()))
+        );
+        assert_eq!(
+            settings.merged().get("workspace.default-terminal"),
+            Some(&ConfigValue::String("Ghostty".into()))
         );
     }
 

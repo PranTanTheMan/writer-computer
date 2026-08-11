@@ -35,6 +35,10 @@ interface SidebarNavigatorProps {
   enableContextMenus?: boolean;
   onOpenFileComplete?: () => void;
   className?: string;
+  renamingPath: string | null;
+  onRenamingPathChange: (path: string | null) => void;
+  everythingCollapsed: boolean;
+  onEverythingCollapsedChange: (collapsed: boolean) => void;
 }
 
 function getExtension(name: string): string {
@@ -48,6 +52,10 @@ export function SidebarNavigator({
   enableContextMenus = true,
   onOpenFileComplete,
   className = "flex flex-col gap-4 py-2",
+  renamingPath,
+  onRenamingPathChange,
+  everythingCollapsed,
+  onEverythingCollapsedChange,
 }: SidebarNavigatorProps) {
   const { root } = useWorkspace();
   const defaultOpenFile = useOpenFile();
@@ -247,11 +255,17 @@ export function SidebarNavigator({
         </SidebarSection>
       )}
 
-      <SidebarSection title="Everything">
+      <SidebarSection
+        title="Everything"
+        collapsed={everythingCollapsed}
+        onCollapsedChange={onEverythingCollapsedChange}
+      >
         <FileTree
           rootPath={root}
           openFile={openFileAndComplete}
           enableContextMenus={enableContextMenus}
+          renamingPath={renamingPath}
+          onRenamingPathChange={onRenamingPathChange}
         />
       </SidebarSection>
     </div>

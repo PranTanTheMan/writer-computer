@@ -58,6 +58,7 @@ describe("workspace-store", () => {
     vi.clearAllMocks();
     useWorkspaceStore.setState({
       root: null,
+      workspaceGeneration: 0,
       chromeMode: "workspace",
       directoryCache: new Map(),
       expandedDirs: new Set(),
@@ -105,6 +106,48 @@ describe("workspace-store", () => {
     // Collapse
     await useWorkspaceStore.getState().toggleDirectory("/test/dir");
     expect(useWorkspaceStore.getState().expandedDirs.has("/test/dir")).toBe(false);
+  });
+
+  test("refreshDirectory discards results after the workspace changes", async () => {
+    const read = createDeferred<unknown>();
+    mockedInvoke.mockImplementation((command: string) =>
+      command === "read_directory" ? read.promise : Promise.resolve(null),
+    );
+    useWorkspaceStore.setState({ root: "/old", directoryCache: new Map() });
+
+    const refresh = useWorkspaceStore.getState().refreshDirectory("/old");
+    useWorkspaceStore.setState({
+      root: "/new",
+      directoryCache: new Map([["/new", []]]),
+    });
+    read.resolve([]);
+    await refresh;
+
+    expect(useWorkspaceStore.getState().directoryCache.has("/old")).toBe(false);
+    expect(useWorkspaceStore.getState().directoryCache.has("/new")).toBe(true);
+  });
+
+  test("refreshDirectory discards ABA results after the same root is reopened", async () => {
+    const read = createDeferred<unknown>();
+    mockedInvoke.mockImplementation((command: string) =>
+      command === "read_directory" ? read.promise : Promise.resolve(null),
+    );
+    useWorkspaceStore.setState({
+      root: "/workspace",
+      workspaceGeneration: 1,
+      directoryCache: new Map(),
+    });
+
+    const refresh = useWorkspaceStore.getState().refreshDirectory("/workspace");
+    useWorkspaceStore.setState({
+      root: "/workspace",
+      workspaceGeneration: 3,
+      directoryCache: new Map([["/workspace", []]]),
+    });
+    read.resolve([{ name: "stale.md" }]);
+    await refresh;
+
+    expect(useWorkspaceStore.getState().directoryCache.get("/workspace")).toEqual([]);
   });
 
   test("invalidatePath removes from cache", () => {
@@ -1102,8 +1145,18 @@ describe("workspace-store closeWorkspace", () => {
     });
   });
 
-  test("closeWorkspace resets workspace and editor state", () => {
-    useWorkspaceStore.getState().closeWorkspace();
+  test("closeWorkspace invalidates the backend before resetting workspace and editor state", async () => {
+    const close = createDeferred<unknown>();
+    mockedInvoke.mockImplementation((command: string) =>
+      command === "close_workspace" ? close.promise : Promise.resolve(null),
+    );
+    const closing = useWorkspaceStore.getState().closeWorkspace();
+
+    expect(mockedInvoke).toHaveBeenCalledWith("close_workspace", { root: "/test" });
+    expect(useWorkspaceStore.getState().root).toBe("/test");
+
+    close.resolve(null);
+    await closing;
 
     const ws = useWorkspaceStore.getState();
     expect(ws.root).toBeNull();
@@ -1117,9 +1170,10 @@ describe("workspace-store closeWorkspace", () => {
     expect(ed.tabs).toEqual([]);
   });
 
-  test("closeWorkspace is no-op when no workspace is open", () => {
+  test("closeWorkspace is no-op when no workspace is open", async () => {
     useWorkspaceStore.setState({ root: null });
-    useWorkspaceStore.getState().closeWorkspace();
+    await useWorkspaceStore.getState().closeWorkspace();
     expect(useWorkspaceStore.getState().root).toBeNull();
+    expect(mockedInvoke).not.toHaveBeenCalledWith("close_workspace", expect.anything());
   });
 });

@@ -32,16 +32,58 @@ fn with_settings_mut<T>(
     }
 }
 
+fn with_global_settings_mut<T>(
+    app_state: &AppState,
+    state: &WorkspaceState,
+    f: impl FnOnce(&mut Settings) -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    let _global_guard = app_state.global_settings_file_lock.lock();
+    let mut settings_guard = state.settings.write();
+    let settings = settings_guard
+        .as_mut()
+        .ok_or_else(|| AppError::Io("Settings not initialized".into()))?;
+    f(settings)
+}
+
+fn init_window_settings_at(
+    app_state: &AppState,
+    state: &WorkspaceState,
+    config_dir: std::path::PathBuf,
+) -> Result<(), AppError> {
+    let _global_guard = app_state.global_settings_file_lock.lock();
+    let settings = Settings::new(config_dir).map_err(|error| AppError::Io(error.to_string()))?;
+    *state.settings.write() = Some(settings);
+    Ok(())
+}
+
+pub(crate) fn get_global_string_setting(
+    app: &tauri::AppHandle,
+    label: &str,
+    key: &str,
+) -> Result<String, AppError> {
+    let value = with_settings(app, label, |settings| {
+        settings.get_global_or_default(key).cloned()
+    })?
+    .ok_or_else(|| AppError::Io(format!("Missing setting: {key}")))?;
+    value
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| AppError::Io(format!("Setting {key} must be a string")))
+}
+
 /// Initialize a window's Settings layer. Called from the window setup path
 /// (main window in `setup`, secondary windows in `open_workspace_in_new_window`
 /// and the single-instance handler) so every window has its own merged view
 /// of defaults + global + workspace settings.
-pub fn init_window_settings(app: &tauri::AppHandle, state: &Arc<WorkspaceState>) {
+pub fn init_window_settings(
+    app: &tauri::AppHandle,
+    state: &Arc<WorkspaceState>,
+) -> Result<(), AppError> {
     let config_dir = app
         .path()
         .app_data_dir()
         .expect("failed to get app data dir");
-    *state.settings.write() = Some(Settings::new(config_dir));
+    init_window_settings_at(app.state::<AppState>().inner(), state, config_dir)
 }
 
 pub fn config_value_to_json(v: &ConfigValue) -> Value {
@@ -106,17 +148,31 @@ pub fn set_setting(
     scope: String,
     webview: tauri::Webview,
     app: tauri::AppHandle,
-) -> Result<(), AppError> {
+) -> Result<Value, AppError> {
     let config_value =
         json_to_config_value(&value).ok_or_else(|| AppError::Io("Invalid value type".into()))?;
 
-    with_settings_mut(&app, webview.label(), |settings| {
+    let state = app.state::<AppState>().get_or_create(webview.label());
+    let persist = |settings: &mut Settings| {
         let result = match scope.as_str() {
             "workspace" => settings.set_workspace(&key, config_value),
             _ => settings.set_global(&key, config_value),
         };
-        result.map_err(|e| AppError::Io(e.to_string()))
-    })?
+        result.map_err(|e| AppError::Io(e.to_string()))?;
+        let value = match scope.as_str() {
+            "workspace" => settings.get(&key),
+            _ => settings.get_global_or_default(&key),
+        };
+        value
+            .cloned()
+            .ok_or_else(|| AppError::Io(format!("Missing setting after write: {key}")))
+    };
+    let persisted = if scope == "workspace" {
+        with_settings_mut(&app, webview.label(), persist)??
+    } else {
+        with_global_settings_mut(app.state::<AppState>().inner(), &state, persist)?
+    };
+    Ok(config_value_to_json(&persisted))
 }
 
 #[tauri::command]
@@ -126,11 +182,81 @@ pub fn reset_setting(
     webview: tauri::Webview,
     app: tauri::AppHandle,
 ) -> Result<(), AppError> {
-    with_settings_mut(&app, webview.label(), |settings| {
+    let state = app.state::<AppState>().get_or_create(webview.label());
+    let reset = |settings: &mut Settings| {
         let result = match scope.as_str() {
             "workspace" => settings.reset_workspace(&key),
             _ => settings.reset_global(&key),
         };
         result.map_err(|e| AppError::Io(e.to_string()))
-    })?
+    };
+    if scope == "workspace" {
+        with_settings_mut(&app, webview.label(), reset)?
+    } else {
+        with_global_settings_mut(app.state::<AppState>().inner(), &state, reset)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn global_mutation_and_window_initialization_share_one_process_lock() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let app_state = Arc::new(AppState::new());
+        let writer_state = Arc::new(WorkspaceState::default());
+        *writer_state.settings.write() =
+            Some(Settings::new(config_dir.path().to_path_buf()).unwrap());
+        let initializing_state = Arc::new(WorkspaceState::default());
+
+        let (writer_entered_tx, writer_entered_rx) = mpsc::channel();
+        let (release_writer_tx, release_writer_rx) = mpsc::channel();
+        let writer_app_state = app_state.clone();
+        let writer_window_state = writer_state.clone();
+        let writer = std::thread::spawn(move || {
+            with_global_settings_mut(&writer_app_state, &writer_window_state, |settings| {
+                writer_entered_tx.send(()).unwrap();
+                release_writer_rx.recv().unwrap();
+                settings
+                    .set_global(
+                        "workspace.default-terminal",
+                        ConfigValue::String("Ghostty".into()),
+                    )
+                    .map_err(|error| AppError::Io(error.to_string()))
+            })
+            .unwrap();
+        });
+        writer_entered_rx.recv().unwrap();
+
+        let (initialized_tx, initialized_rx) = mpsc::channel();
+        let init_app_state = app_state.clone();
+        let init_window_state = initializing_state.clone();
+        let init_config_dir = config_dir.path().to_path_buf();
+        let initializer = std::thread::spawn(move || {
+            init_window_settings_at(&init_app_state, &init_window_state, init_config_dir).unwrap();
+            initialized_tx.send(()).unwrap();
+        });
+
+        assert!(initialized_rx
+            .recv_timeout(Duration::from_millis(50))
+            .is_err());
+        assert!(initializing_state.settings.read().is_none());
+
+        release_writer_tx.send(()).unwrap();
+        writer.join().unwrap();
+        initialized_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        initializer.join().unwrap();
+
+        let initialized = initializing_state.settings.read();
+        assert_eq!(
+            initialized
+                .as_ref()
+                .unwrap()
+                .get("workspace.default-terminal"),
+            Some(&ConfigValue::String("Ghostty".into()))
+        );
+    }
 }
