@@ -82,6 +82,7 @@ Previously-triaged work organized by phase. Pull into `Up Next` as capacity open
 
 - [ ] Archive files: [`SPECs/archive-files-spec.md`](SPECs/archive-files-spec.md) — medium risk. Adds a parallel storage area and a purge job.
 - [ ] Multi window (v1 shipped — single-process multi-window): [`SPECs/multi-window-spec.md`](SPECs/multi-window-spec.md). Future work: macOS Window menu listing open workspaces, session restore of all open windows at quit, tab tear-off across windows.
+- [ ] Real-time collaboration: [`SPECs/real-time-collaboration-spec.md`](SPECs/real-time-collaboration-spec.md) — staged Yjs-based shared-folder collaboration; Phase 0 first resolves official Relay interoperability versus a Writer-owned provider and proves a single-owner disk/CRDT pipeline.
 - [ ] Custom MCP: [`SPECs/custom-mcp-spec.md`](SPECs/custom-mcp-spec.md) — **high risk**. New protocol client, trust model, and tool invocation surface.
 - [ ] Writer CLI: [`SPECs/writer-cli-spec.md`](SPECs/writer-cli-spec.md) — standalone second binary; can slot in whenever convenient.
 
