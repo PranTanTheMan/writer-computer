@@ -45,11 +45,23 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@types/katex": "catalog:",
+    "@types/node": "catalog:",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
+    "@types/ws": "catalog:",
     "@vitejs/plugin-react": "^4.6.0",
     "@welldone-software/why-did-you-render": "catalog:",
+    "@y-sweet/client": "catalog:",
+    "@y-sweet/sdk": "catalog:",
+    "fake-indexeddb": "catalog:",
+    "happy-dom": "catalog:",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "ws": "catalog:",
+    "y-codemirror.next": "catalog:",
+    "y-indexeddb": "catalog:",
+    "y-protocols": "catalog:",
+    "y-sweet": "catalog:",
+    "yjs": "catalog:"
   }
 }

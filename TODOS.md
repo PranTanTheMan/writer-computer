@@ -4,8 +4,13 @@
 
 - Reveal-in-sidebar + residual external-watcher misses: [`SPECs/reveal-in-sidebar-and-external-watcher-spec.md`](SPECs/reveal-in-sidebar-and-external-watcher-spec.md) — keep the explicit tab-context-menu "Reveal in sidebar" action working, leave ordinary file opens from expanding the Everything tree, and characterize the remaining external-file-watcher miss cases through a logging + manual-repro pass before patching further.
 
+## Up Next
+
+- Real-time collaboration Phase 1: [`SPECs/real-time-collaboration-spec.md`](SPECs/real-time-collaboration-spec.md) — implement the shared-document coordinator and pinned y-sweet provider behind a feature flag, including production origin tagging, CRDT-only undo, IndexedDB health state, authorization lifecycle tests, and packaged-WebView durability gates while leaving non-shared files on the existing save path.
+
 ## Done
 
+- Real-time collaboration Phase 0: [`SPECs/real-time-collaboration-spec.md`](SPECs/real-time-collaboration-spec.md) — select a Writer-owned, self-hosted y-sweet boundary; record process-wide single-owner projection, conditional IndexedDB persistence, hosting, and invitation decisions; and prove Writer-shaped CodeMirror/Yjs convergence, offline recovery, presence lifecycle, provider restart, and fenced real-file writes in disposable test harnesses without shipping collaboration UI or save/watcher changes.
 - Table column sizing (Phase A, CSS-only): [`SPECs/table-column-sizing-spec.md`](SPECs/table-column-sizing-spec.md) — folded table cells inherited `overflow-wrap: anywhere` from `EditorView.lineWrapping`, which feeds min-content sizing and let the auto table layout starve columns until words broke mid-word. Reset to `overflow-wrap: break-word` + `word-break: normal`, replaced the blanket `min-width: 6em` with a `max-width: 48ch` per-cell demand cap, top-aligned cells, and left-aligned headers while keeping explicit `:---:` / `---:` alignment. Phase B (wide tables breaking out of the editor measure) and Phase C (JS column-width computation) remain open.
 - PR #111 review fixes: [`SPECs/Agent/worksheet-pr111-review-fixes.md`](SPECs/Agent/worksheet-pr111-review-fixes.md) — guard creation and external launches against workspace switches, closes, and replaced roots; preserve cross-window global settings writes; and route the sidebar background menu through the full surface and rootless shell.
 - Folder-row Open in Terminal: [`SPECs/sidebar-empty-area-context-menu-spec.md`](SPECs/sidebar-empty-area-context-menu-spec.md) — add an Open in Terminal action to folder row context menus, launching the selected in-workspace directory with the configured terminal.
@@ -82,7 +87,6 @@ Previously-triaged work organized by phase. Pull into `Up Next` as capacity open
 
 - [ ] Archive files: [`SPECs/archive-files-spec.md`](SPECs/archive-files-spec.md) — medium risk. Adds a parallel storage area and a purge job.
 - [ ] Multi window (v1 shipped — single-process multi-window): [`SPECs/multi-window-spec.md`](SPECs/multi-window-spec.md). Future work: macOS Window menu listing open workspaces, session restore of all open windows at quit, tab tear-off across windows.
-- [ ] Real-time collaboration: [`SPECs/real-time-collaboration-spec.md`](SPECs/real-time-collaboration-spec.md) — staged Yjs-based shared-folder collaboration; Phase 0 first resolves official Relay interoperability versus a Writer-owned provider and proves a single-owner disk/CRDT pipeline.
 - [ ] Custom MCP: [`SPECs/custom-mcp-spec.md`](SPECs/custom-mcp-spec.md) — **high risk**. New protocol client, trust model, and tool invocation surface.
 - [ ] Writer CLI: [`SPECs/writer-cli-spec.md`](SPECs/writer-cli-spec.md) — standalone second binary; can slot in whenever convenient.
 

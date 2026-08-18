@@ -2,9 +2,11 @@
 
 ## Status
 
-**Planning.** The first deliverable is a bounded interoperability and architecture
-spike. No production collaboration behavior should ship until that spike resolves
-the provider decision and proves the document/write pipeline.
+**Phase 0 complete.** The provider, ownership, persistence, hosting, and invitation
+decisions are recorded in the
+[Phase 0 decision record](../docs/decisions/real-time-collaboration-phase-0.md).
+Phase 1 is the next implementation boundary. No production collaboration behavior
+has shipped; the Phase 0 harness and ownership prototype remain test-only.
 
 ## Summary
 
@@ -248,24 +250,48 @@ recoverable tombstones.
 
 Deliverables:
 
-- Ask System 3 whether Writer can use an officially supported Relay client
+- Establish a dated evidence cutoff for an officially supported Relay client
   protocol, hosted service, authentication flow, and brand/product integration.
-- Record protocol stability, licensing, pricing, support, and data-processing
-  constraints. Do not infer permission to use proprietary control-plane APIs from
-  public source availability.
-- Build a throwaway two-client CodeMirror/Yjs harness using an in-memory or local
-  y-sweet-compatible provider.
-- Prove local edits, remote edits, cursor presence, offline queue/reconnect, and
-  local-only undo.
-- Prototype the multi-window owner/lease options and select one.
-- Write an architecture decision record choosing `relay-supported` or
-  `writer-owned` and choosing the local session owner.
+  Written confirmation from System 3 can satisfy this; public client source alone
+  cannot. Record protocol stability, licensing, pricing, support, and
+  data-processing constraints. Do not call undocumented proprietary control-plane
+  APIs.
+- Build a throwaway two-client CodeMirror/Yjs harness using both a deterministic
+  transport and the selected concrete local server adapter. The initial
+  Writer-owned candidate is self-hosted y-sweet `0.9.1` with
+  `@y-sweet/client` `0.9.1`; any different choice must be recorded in the ADR.
+- Mount Writer-shaped CodeMirror views in an isolated DOM-capable test environment.
+  Prove collaboration-compartment attach/remove/reconfigure, document swap,
+  destroy/remount, transaction provenance, awareness cleanup, offline
+  state-vector reconciliation, and local-only undo through the editor command
+  path.
+- Run a deterministic schedule matrix covering overlapping edits, both clients
+  offline, both reconnect orders, duplicate/delayed/reordered/dropped updates,
+  post-reconnect edits, awareness removal and fresh reconnect publication, and
+  selected-provider restart. Timeout-based expiry remains a Phase 1 provider test.
+- Add a disposable persistence adapter and prove persist-before-queued semantics,
+  client destruction/recreation, recovery, and explicit persistence failure. Make
+  and record the IndexedDB-versus-Rust decision.
+- Prototype process ownership at the Rust boundary. Prefer a process-owned document
+  session to which windows attach; if projection authority can transfer, protect
+  the write boundary with monotonically increasing fencing generations. Cover
+  simultaneous attachment, stale detach, window destruction, workspace switching,
+  delayed writes, sleep/wake, and reacquisition.
+- Write an architecture decision record covering provider/protocol/version,
+  process ownership, local persistence, initial hosting mode, and production
+  invitation model.
 
 Exit gate:
 
-- Two clients converge under concurrent and offline edits.
-- The selected provider has a documented support/licensing path.
-- The chosen local owner cannot produce two disk writers for one shared document.
+- Two real CodeMirror clients and their Yjs replicas converge under the full
+  deterministic schedule matrix and against the concrete local server adapter.
+- The selected provider has a documented protocol version, support/licensing path,
+  authentication boundary, and upgrade policy.
+- Offline edits survive client destruction/recreation, and persistence failure is
+  never reported as safely queued.
+- The Rust ownership prototype rejects stale and concurrent projection permits at
+  the write boundary, not merely in an abstract owner model.
+- All five architecture decisions at the end of this spec are resolved in the ADR.
 - No production UI or migration is merged from the throwaway harness.
 
 ### Phase 1 — shared-document core behind a feature flag
@@ -453,8 +479,14 @@ packaged-app E2E scenarios for every implementation phase.
 
 ## Decisions Required at the Phase 0 Gate
 
-1. Relay-supported provider or Writer-owned provider?
-2. Process-wide Rust session registry or Tauri-coordinated frontend lease?
-3. IndexedDB persistence or Rust-owned local CRDT store for production?
-4. Writer-hosted service only, self-hosting only, or both?
-5. Account-based invitations in the MVP, or an explicitly scoped share-key model?
+Resolved in the
+[Phase 0 decision record](../docs/decisions/real-time-collaboration-phase-0.md):
+
+1. Writer-owned provider boundary, initially y-sweet `0.9.1`; no unsupported
+   Relay compatibility claim.
+2. Process-wide Rust session registry with fenced projection permits.
+3. IndexedDB for Phase 1, gated by packaged-WebView durability tests before
+   production; Rust-owned persistence remains the fallback.
+4. Self-hosting first; a Writer-hosted service is deferred.
+5. Account-based, revocable invitations for production; development tokens stay
+   local and feature-flagged.

@@ -52,6 +52,7 @@ All docs except CLAUDE.md, AGENTS.md, TODOS.md, and CHANGELOG.md live in `./docs
 - [TODOS.md](./TODOS.md) — task backlog and work-in-progress tracking
 - [CHANGELOG.md](./CHANGELOG.md) — user-visible changes log
 - [SPECs/](./SPECs/) — human-written feature and bug specs
+- [docs/decisions/](./docs/decisions/) — accepted architecture decisions
 
 ## Hard Rules
 

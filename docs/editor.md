@@ -157,6 +157,12 @@ Pure-helper tests (`computeToggleSelection`-style) catch math bugs but not focus
 
 When a widget has a click → dispatch → mode-change cycle, mount a real `EditorView` with two instances and simulate clicks. Assert against `view.state.selection.main` and `view.state.field(foldExtension)`, not against helper outputs.
 
+## Shared documents use one history owner
+
+`prosemarkBasicSetup()` installs CodeMirror's native history by default. A CRDT-backed shared document must call `prosemarkBasicSetup({ history: false })` and install its Yjs undo manager and keymap in the collaboration compartment instead. Keymap precedence alone is insufficient: an empty Yjs undo stack could otherwise fall through to native history and undo a remote edit.
+
+A document swap or reload must replace the Yjs undo manager with the document binding, and empty-stack undo/redo commands must still consume the command. This keeps history scoped to the current shared document and prevents native and CRDT histories from competing.
+
 ## File map
 
 - `mermaid-decorations.ts` — canonical conditional replace ↔ widget. Reference for the click → dispatch → mode-change pattern, range-selection toggle, and live position lookup.

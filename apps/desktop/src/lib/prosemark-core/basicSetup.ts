@@ -1,7 +1,12 @@
 import { keymap, dropCursor, EditorView } from "@codemirror/view";
 import { type Extension } from "@codemirror/state";
 import { indentOnInput, bracketMatching, foldGutter, foldKeymap } from "@codemirror/language";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import {
+  defaultKeymap,
+  history as codeMirrorHistory,
+  historyKeymap,
+  indentWithTab,
+} from "@codemirror/commands";
 import { searchKeymap } from "@codemirror/search";
 import {
   autocompletion,
@@ -26,7 +31,13 @@ import { revealBlockOnArrowExtension } from "./revealBlockOnArrow";
 import { prosemarkMarkdownFormattingKeymap } from "./markdownFormattingKeymap";
 export { prosemarkMarkdownSyntaxExtensions } from "./markdown";
 
-export const prosemarkBasicSetup = (): Extension => [
+export interface ProsemarkBasicSetupOptions {
+  history?: boolean;
+}
+
+export const prosemarkBasicSetup = ({
+  history = true,
+}: ProsemarkBasicSetupOptions = {}): Extension => [
   // ProseMark Setup
   defaultHideExtensions,
   defaultFoldableSyntaxExtensions,
@@ -38,7 +49,7 @@ export const prosemarkBasicSetup = (): Extension => [
   codeBlockDecorationsExtension,
 
   // Basic CodeMirror Setup
-  history(),
+  history ? codeMirrorHistory() : [],
   dropCursor(),
   indentOnInput(),
   bracketMatching(),
@@ -49,7 +60,7 @@ export const prosemarkBasicSetup = (): Extension => [
     ...closeBracketsKeymap,
     ...defaultKeymap,
     ...searchKeymap,
-    ...historyKeymap,
+    ...(history ? historyKeymap : []),
     ...foldKeymap,
     ...completionKeymap,
     ...lintKeymap,
